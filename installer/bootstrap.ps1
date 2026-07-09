@@ -25,8 +25,8 @@ param(
   [string]$Repo = 'localai-windows-starter',
   [string]$Ref = 'v0.1.0',
   # Filled once the tag is cut; verified after fetch. Empty = not yet pinned.
-  [string]$ExpectedCommit = '',
-  [string]$ExpectedZipSha256 = '',
+  [string]$ExpectedCommit = '1d3d719fb61ec5ca84f30ae054442b8deb965463',
+  [string]$ExpectedZipSha256 = '1504D4988DCC329B4168FE8A5D19C24C554705FEB3B02FB56EB58EF3DCDC0321',
   [switch]$AllowUnverified,
   [string]$Destination = (Join-Path $env:USERPROFILE 'localai'),
   [string[]]$InstallerArgs = @()
