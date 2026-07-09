@@ -1,0 +1,7 @@
+# qwen3-coder-agent — qwen3-coder:30b with a 32k context window.
+# Agentic terminal tools (OpenCode, Aider, Qwen Code) need >=16k context for
+# reliable tool-calling; the global OLLAMA_CONTEXT_LENGTH is 8k (kept low so the
+# 14B chat model stays fully on the GPU). This variant overrides num_ctx just for
+# coding-agent use. Weights are shared with qwen3-coder:30b (no extra disk).
+FROM qwen3-coder:30b
+PARAMETER num_ctx 32768

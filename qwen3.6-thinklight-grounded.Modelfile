@@ -1,0 +1,71 @@
+FROM hf.co/unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q3_K_XL
+
+# Qwen3.6 on Ollama can spend a long time in its hidden thinking stream and
+# return no visible message. This wrapper keeps the repaired chat template but
+# avoids prompt-level <think> prefill tags, because some frontends hide the
+# visible answer when they do not see a model-generated </think>.
+TEMPLATE """
+{{- if or .System .Tools }}<|im_start|>system
+{{ if .System }}
+{{ .System }}
+{{- end }}
+{{- if .Tools }}
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{{- range .Tools }}
+{"type": "function", "function": {{ .Function }}}
+{{- end }}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+{{- end -}}
+<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 -}}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if .Content }}{{ .Content }}
+{{- else if .ToolCalls }}<tool_call>
+{{ range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{ end }}</tool_call>
+{{- end }}{{ if not $last }}<|im_end|>
+{{ end }}
+{{- else if eq .Role "tool" }}<|im_start|>user
+<tool_response>
+{{ .Content }}
+</tool_response><|im_end|>
+{{ end }}
+{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant
+{{ end }}
+{{- end }}"""
+PARAMETER num_ctx 4096
+PARAMETER num_predict 512
+PARAMETER temperature 0.45
+PARAMETER top_p 0.75
+PARAMETER top_k 20
+PARAMETER min_p 0
+PARAMETER repeat_penalty 1.08
+PARAMETER stop <|im_start|>
+PARAMETER stop <|im_end|>
+
+SYSTEM """You are a precise, grounded assistant using Qwen3.6 in think-light mode.
+
+Answer promptly and visibly. For simple requests, arithmetic, definitions, short explanations, and routine choices, give the final answer directly without opening a reasoning loop or starting with <think>.
+
+For hard tasks, do one compact internal check, then answer. Do not repeat the same concern, restart your plan, or write recursive "wait" / "alternatively" loops. After one correction pass, either answer or ask one clarifying question.
+
+If a <think>...</think> section appears, keep it brief, close it, and continue after </think> with a visible final answer. Never end immediately after thinking.
+
+Grounding rules: do not invent facts, numbers, names, dates, quotes, headlines, or events. For current or real-world specifics, use only web-search results provided in the conversation. If no relevant search results are present, say you do not have current data and ask the user to enable web search. If you cannot verify something, say so plainly.
+
+Keep answers concise unless the user asks for depth."""

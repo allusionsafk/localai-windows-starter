@@ -1,0 +1,33 @@
+# --- Secrets: real values, NEVER commit ---
+.env
+.env.*
+!.env.example
+
+# --- Local logs, backups, one-off artifacts ---
+logs/*
+!logs/.gitkeep
+backups/
+*.bak
+dash-err.txt
+dash-out.txt
+
+# Generated model-scout candidate Modelfiles are throwaway
+scout-*.Modelfile
+
+# --- Installer runtime state (resume/audit trail; per-machine, never commit) ---
+installer/installer-state.json
+
+# --- Python build/test artifacts ---
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# --- Windows OS cruft ---
+Thumbs.db
+desktop.ini

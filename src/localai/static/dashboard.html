@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>localai Control Center</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail" id="rail" aria-label="Tasks"></aside>
+
+      <main class="surface">
+        <header class="masthead">
+          <div class="masthead-id">
+            <div class="eyebrow">localai</div>
+            <h1>Control Center</h1>
+            <div class="meta">
+              <span id="meta-version">v—</span>
+              <span class="meta-sep" aria-hidden="true"></span>
+              <span class="meta-host"><span class="host-dot" id="host-dot"></span><span id="meta-host">host —</span></span>
+              <span class="meta-sep" aria-hidden="true"></span>
+              <span id="meta-checked">not checked yet</span>
+            </div>
+          </div>
+          <div class="quick-actions" id="quick-actions"></div>
+        </header>
+
+        <section id="home-view">
+          <div class="hero">
+            <div class="start-card" id="start-card" role="button" tabindex="0"
+                 aria-label="Start Local AI">
+              <div class="start-watermark" aria-hidden="true" id="start-watermark"></div>
+              <div class="start-top">
+                <div class="start-chip" id="start-chip"></div>
+                <span class="start-pill">Recommended</span>
+              </div>
+              <div class="start-body">
+                <div class="start-title">Start Local AI</div>
+                <div class="start-sub">Boots Ollama &amp; Open WebUI, then warms your chosen model.</div>
+                <div class="start-cmd">localai start</div>
+                <label class="start-warm" id="start-warm" hidden>
+                  <span class="sw-label">warm</span>
+                  <select id="warm-select" aria-label="Model to warm on start"></select>
+                </label>
+              </div>
+            </div>
+
+            <div class="health-card">
+              <div class="health-head">
+                <span class="health-dot" id="health-dot"></span>
+                <span class="health-title">System health</span>
+                <button class="icon-btn" id="health-rerun" type="button" title="Re-run health check" aria-label="Re-run health check"></button>
+                <span class="health-word" id="health-word">not checked</span>
+              </div>
+              <div class="health-counts">
+                <div class="count"><span class="count-num fail" id="count-fail">–</span><span class="count-label">Failed</span></div>
+                <div class="count"><span class="count-num warn" id="count-warn">–</span><span class="count-label">Warnings</span></div>
+                <div class="count"><span class="count-num ok" id="count-ok">–</span><span class="count-label">Passing</span></div>
+              </div>
+              <button class="soft-btn health-toggle" id="health-toggle" type="button">
+                <span id="health-toggle-label">Details</span>
+                <span class="chev" id="health-chev"></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="report-panel" id="home-report" hidden></div>
+
+          <div class="section-head">
+            <span class="section-title">Launch</span>
+            <span class="section-sub">Apps &amp; services</span>
+          </div>
+          <div class="tiles" id="tiles"></div>
+
+          <div class="section-head">
+            <span class="section-title">Runtime</span>
+            <span class="section-sub">Live engine status</span>
+          </div>
+          <div class="stats" id="stats"></div>
+
+          <div class="section-head">
+            <span class="section-title">System</span>
+            <span class="section-sub">This machine at a glance</span>
+          </div>
+          <div class="stats" id="system-stats"></div>
+        </section>
+
+        <section id="task-view" hidden></section>
+      </main>
+    </div>
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>

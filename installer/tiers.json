@@ -1,0 +1,23 @@
+{
+  "//": "Single source of truth for capability tiers, consumed by both the PowerShell vet phase and src/localai/installer_vet.py. The KV/weights/overhead constants MIRROR src/localai/model_scout.py (WEIGHTS_GB_PER_B, VRAM_OVERHEAD_GB, KV_GB_PER_1K_BUCKETS, KV_DTYPE_FACTORS); test_tiers_json_constants_mirror_model_scout guards the two from drifting. Do NOT edit numbers here without updating model_scout and re-running the tests.",
+  "overhead_gb": 1.5,
+  "weights_gb_per_b": 0.6,
+  "kv_gb_per_1k": {"4": 0.11, "14": 0.16, "32": 0.2, "inf": 0.26},
+  "kv_dtype_factor": {"f16": 1.0, "q8_0": 0.5},
+  "kv_dtype_default": "q8_0",
+  "//kv_dtype": "installer sets OLLAMA_KV_CACHE_TYPE=q8_0 host-side (ref-box #1); tier gates assume q8_0. C caps at 3B: 4B@8k = 4.34 GB > 4 even at q8_0.",
+  "tiers": [
+    {"id": "S",   "min_vram_gb": 16, "max_dense_b": 14, "ctx": 32768, "example": "qwen2.5:14b class"},
+    {"id": "A",   "min_vram_gb": 12, "max_dense_b": 9,  "ctx": 32768, "example": "qwen3.5:9b-32k"},
+    {"id": "B",   "min_vram_gb": 8,  "max_dense_b": 7,  "ctx": 16384, "example": "qwen2.5:7b class"},
+    {"id": "C",   "min_vram_gb": 4,  "max_dense_b": 3,  "ctx": 8192,  "example": "qwen2.5:3b class"},
+    {"id": "CPU", "min_vram_gb": 0,  "max_dense_b": 4,  "ctx": 8192,  "example": "qwen 4B-A0.6 class", "warn": "CPU-only: slow, small models only"}
+  ],
+  "intents": {
+    "chat":   {"categories": ["chat"]},
+    "coding": {"categories": ["coding"]},
+    "web":    {"categories": ["web-nav"], "needs_node": true},
+    "voice":  {"categories": ["voice"], "compose_services": ["kokoro"]},
+    "images": {"categories": [], "note": "host ComfyUI, out of installer scope v1"}
+  }
+}

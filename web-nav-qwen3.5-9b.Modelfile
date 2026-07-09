@@ -1,0 +1,35 @@
+# web-nav-qwen3.5-9b — OPT-IN / EXPERIMENTAL Nanobrowser model. NOT the default.
+#
+# Status (benchmarked 2026-06-23): web-nav-qwen2.5-coder-14b remains the Nanobrowser default.
+# qwen3.5:9b fits beautifully (6.3 GB, 100% GPU, 32K context — more headroom than the 14B coder)
+# and emits correct structured JSON, BUT it is a thinking-capable model and Ollama gives no way to
+# disable thinking model-side for this build:
+#   - new compiled RENDERER qwen3.5 / PARSER qwen3.5 (TEMPLATE is just "{{ .Prompt }}", so the
+#     qwen3.6-thinklight TEMPLATE trick does not apply)
+#   - `PARAMETER think false` is rejected ("unknown parameter")
+#   - a SYSTEM block is overridden by Nanobrowser's own system prompt
+#   - the `/no_think` soft switch is ignored, and the /v1 endpoint thinks too
+# The ONLY lever is the request-level `think: false` field, which the CLIENT (Nanobrowser) must
+# send. With thinking on, each turn spends ~1800+ reasoning tokens BEFORE the action — tens of
+# seconds per step on a 12 GB GPU, and a small per-call token budget yields EMPTY actions.
+#
+# Use this model only if EITHER:
+#   1. your Nanobrowser build sends `think:false` (or has a thinking toggle) on the Ollama provider, OR
+#   2. you want its VISION (it is multimodal at 32K on-GPU) and accept the per-step thinking latency.
+# Otherwise stay on web-nav-qwen2.5-coder-14b (no thinking, fast, reliable nested-JSON actions).
+#
+# num_ctx 32768: the model's default OUTSIDE Nanobrowser. Nanobrowser overrides it to 64000
+# (helper.ts:345); measured 100% GPU at 64K (~6.9 GB) on the 12 GB card, so 64K fits fine.
+# temperature 0.2: near-deterministic actions when it IS used.
+# presence_penalty 0: the base qwen3.5:9b ships presence_penalty 1.5 (to damp
+#   thinking-loop repetition). With the think-proxy forcing think:false there is no
+#   thinking loop to damp, and a positive presence penalty actively corrupts long
+#   structured output - it penalises the very tokens JSON repeats ({ " , key names,
+#   element indices), so longer nav/plan actions drop quotes, rename keys, or stop
+#   early. Override to 0 for structured output. (Confirmed 2026-07-05: `ollama show`
+#   reported the inherited 1.5; web reports the same class of qwen3 think:false JSON
+#   breakage.)
+FROM qwen3.5:9b
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.2
+PARAMETER presence_penalty 0

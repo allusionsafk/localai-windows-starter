@@ -1,0 +1,143 @@
+name: localai
+
+# Self-contained local AI workspace:
+#   - Open WebUI (chat UI) on http://localhost:3000
+#   - SearXNG (private web search) on http://localhost:8080
+# Models are served by Ollama running natively on the Windows host,
+# reached via host.docker.internal:11434. Both services are loopback-only.
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    depends_on:
+      searxng:
+        condition: service_healthy
+    ports:
+      # Laptop-only by default. Use ai-anywhere.ps1 to share it securely with
+      # your own devices through Tailscale Serve instead of exposing it to WiFi.
+      - "127.0.0.1:3000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Default model for new chats + a small fast model for titles/tags/search-queries.
+      # Keep the default responsive; pick qwen3-grounded or deep-thinking-qwen3.6
+      # manually when answer quality matters more than startup latency.
+      - DEFAULT_MODELS=qwen3.5:9b-32k
+      # Leave TASK_MODEL blank so Open WebUI title/tag/query tasks use the
+      # current chat model. Pointing this at any separate model loads that
+      # model after a reply and can evict the model you are actively using.
+      - TASK_MODEL=
+      # Streaming keeps the UI from looking stalled while Ollama is generating.
+      # keep_alive is also set at the Open WebUI request layer so Ollama does
+      # not unload the model after every response even when UI defaults drift.
+      # Do not put "think": false here; full-thinking Qwen3.6 needs to think.
+      # ai-openwebui-thinklight.ps1 applies think=false only to think-light IDs.
+      # num_ctx pinned to 32768 (full context). Warm, the Modelfile, and this
+      # request param all specify 32768 so a chat never triggers a full reload
+      # for a context-size mismatch. Host OLLAMA_CONTEXT_LENGTH raised to 32768
+      # to match on next Ollama start (running server honors per-request 32768).
+      - DEFAULT_MODEL_PARAMS={"stream_response":true,"keep_alive":"30m","num_ctx":32768}
+      # Keep memories available. Qwen3.6 think-light avoids loops via per-model
+      # request params rather than disabling memory for every model.
+      - ENABLE_MEMORIES=True
+      # Web search via the bundled SearXNG (no API keys needed)
+      - ENABLE_WEB_SEARCH=True
+      - WEB_SEARCH_ENGINE=searxng
+      - ENABLE_RAG_WEB_SEARCH=True
+      - RAG_WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>&format=json
+      # Research-tuned: fewer, higher-signal results = faster + less noise
+      - WEB_SEARCH_RESULT_COUNT=3
+      - WEB_SEARCH_CONCURRENT_REQUESTS=4
+      # RAG embeddings run INSIDE the Open WebUI container (SentenceTransformers,
+      # CPU) so they NEVER load a second model in Ollama or touch the GPU. This is
+      # what stops the embed model (nomic) from evicting your chat model. Document
+      # RAG still works; only the engine changed. Web search already bypasses embed
+      # (BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL=True), so this only affects file RAG.
+      # Was: RAG_EMBEDDING_ENGINE=ollama + nomic-embed-text = a 2nd Ollama model = VRAM churn.
+      - RAG_EMBEDDING_ENGINE=
+      # Feed SearXNG results straight to the model (skip fetch+embed) = far more
+      # reliable web search on a local box; avoids "No sources found".
+      - BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL=True
+      - RAG_WEB_SEARCH_FULL_CONTEXT=True
+      # Voice: local Whisper speech-to-text (mic button; works on phone too)
+      - WHISPER_MODEL=base.en
+      # Voice talk-back via local Kokoro neural TTS (CPU, OpenAI-compatible, no VRAM)
+      - AUDIO_TTS_ENGINE=openai
+      - AUDIO_TTS_OPENAI_API_BASE_URL=http://kokoro:8880/v1
+      - AUDIO_TTS_OPENAI_API_KEY=not-needed
+      - AUDIO_TTS_MODEL=kokoro
+      - AUDIO_TTS_VOICE=am_michael
+      # Image generation via host ComfyUI (Flux). Adds an image button in chat.
+      # ComfyUI must be running (Start-Image-Studio.bat) for it to work.
+      - ENABLE_IMAGE_GENERATION=true
+      - IMAGE_GENERATION_ENGINE=comfyui
+      - COMFYUI_BASE_URL=http://host.docker.internal:8188
+      - IMAGE_SIZE=1024x1024
+      - IMAGE_STEPS=4
+    volumes:
+      - open-webui:/app/backend/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read(1)\""]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
+    restart: "no"
+
+  searxng:
+    # Pinned (not :latest) — newer tags have boot-breaking regressions.
+    image: docker.io/searxng/searxng:2026.6.22-952896d29
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ ! -s /etc/searxng/settings.yml ] || grep -q '__SEARXNG_SECRET__' /etc/searxng/settings.yml; then
+          secret="$${SEARXNG_SECRET:-}"
+          if [ -z "$$secret" ]; then
+            secret="$$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          fi
+          sed "s|__SEARXNG_SECRET__|$$secret|g" /tmp/searxng-settings.yml.template > /etc/searxng/settings.yml
+        fi
+        exec /usr/local/searxng/entrypoint.sh
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - searxng-data:/etc/searxng
+      - ./config/searxng/settings.yml:/tmp/searxng-settings.yml.template:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/', timeout=5).read(1)\""]
+      interval: 5s
+      timeout: 6s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+  # Local neural text-to-speech (natural voice talk-back). CPU-only, no VRAM.
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.5.0
+    ports:
+      - "127.0.0.1:8880:8880"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8880/health', timeout=5).read(1)\""]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 20s
+    restart: "no"
+
+volumes:
+  open-webui:
+  searxng-data:

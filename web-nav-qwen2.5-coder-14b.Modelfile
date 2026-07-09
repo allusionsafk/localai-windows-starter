@@ -1,0 +1,26 @@
+# web-nav-qwen2.5-coder-14b — light, fast model for the Nanobrowser Planner + Navigator.
+#
+# Why not qwen3-grounded: it is 17 GB and does NOT fit a 12 GB GPU, so it
+# partially offloads to CPU and crawls through the many-step navigator loop (~18 tok/s in a
+# local benchmark). qwen2.5-coder:14b is 9 GB, fits fully on the GPU (~29 tok/s), and coder
+# models are reliable at the nested JSON action schema Nanobrowser emits — in the same
+# benchmark it produced a correct click action while qwen3-grounded returned an EMPTY action
+# list (valid-but-useless, the real failure mode since Ollama grammar-forces JSON validity).
+#
+# num_ctx 16384: the Navigator receives the page's filtered interactive-element tree every
+# step. The global OLLAMA_CONTEXT_LENGTH is only 8k, which truncates that tree and makes the
+# agent "lose" elements. 16k fits in the remaining VRAM (9 GB weights + KV cache < 12 GB) and
+# stops that truncation.
+#
+# NOTE: when driven by Nanobrowser this is OVERRIDDEN — Nanobrowser hardcodes num_ctx=64000
+# in its Ollama request (helper.ts:345), so under Nanobrowser this 14B runs at 64K (9 GB
+# weights + 64K KV can spill to CPU on 12 GB). This num_ctx only applies outside Nanobrowser;
+# for Nanobrowser on long pages prefer web-nav-qwen3.5-9b (fits 64K at ~6.9 GB).
+#
+# temperature 0.2: near-deterministic, repeatable actions without hard-0 looping.
+#
+# Use the SAME model for Nanobrowser's Planner, Navigator, AND Validator so Ollama keeps it
+# resident — pointing agents at different models forces a ~13 s model reload on every swap.
+FROM qwen2.5-coder:14b
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.2
