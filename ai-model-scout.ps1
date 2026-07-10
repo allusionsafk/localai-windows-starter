@@ -11,7 +11,7 @@
        (general chat, grounded-able, frontier reasoning/non-reasoning models,
        ~30B-MoE or <=14B-dense).
     3. PREPARE the top pick: pull via Ollama, build a <name>-grounded variant,
-       and BENCHMARK it on your 4080 (real tok/s + GPU/CPU split).
+       and BENCHMARK it on your GPU (real tok/s + GPU/CPU split).
     4. REPORT + log so you make the final "make it my default" call.
   It never changes your Open WebUI default on its own unless you run Promote.
 
@@ -509,7 +509,7 @@ if (-not $pick) {
   if ($Mode -eq 'Scout') {
     Say "    (Scout mode: not pulling. Run -Mode Prepare or AI-ModelScout-Now.bat to install it.)" 'DarkGray'
     $logLines.Add("- TOP PICK (not pulled, Scout mode): $($pick.id)")
-    Show-Notify 'Model scout' ("New candidate that fits your 4080: {0}. Run AI-ModelScout-Now.bat to install+ground+benchmark it." -f $pick.name)
+    Show-Notify 'Model scout' ("New candidate that fits your GPU: {0}. Run AI-ModelScout-Now.bat to install+ground+benchmark it." -f $pick.name)
   }
   elseif ($pick.sizeGB -and ($budget.DiskFreeGB -lt ($pick.sizeGB + 12))) {
     Say "[!] Low disk (need ~$($pick.sizeGB+12)GB, have $($budget.DiskFreeGB)GB). Skipping pull; notifying instead." 'Yellow'

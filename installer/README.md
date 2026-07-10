@@ -80,8 +80,16 @@ Invoke-WebRequest $u -OutFile "$env:TEMP\localai-v0.1.0.zip"
 ```
 
 Set those as the `$ExpectedCommit` and `$ExpectedZipSha256` defaults in
-`bootstrap.ps1` (and bump `$Ref`). For local dev testing before a tag exists, run
-with `-AllowUnverified`.
+`bootstrap.ps1` (and bump `$Ref`). For local dev testing before a tag exists,
+run with `-AllowUnverified`.
+
+> Chicken-and-egg note: the pins verify the *repo download*, not
+> `bootstrap.ps1` itself, and a commit cannot contain its own SHA — so each
+> release is a two-commit dance: tag commit N, then commit the pins for N on
+> `master`. Friends must therefore always fetch `bootstrap.ps1` from
+> **master** (the root `README.md` one-liner does): the copy *at the tag* has
+> the previous release's pins (or none) and fails closed. The stub itself is
+> trusted via TLS to GitHub; keep it tiny and reviewable.
 
 > **Before publishing a new tag:** run `localai public-audit --strict` (or
 > `pwsh -File ai-public-audit.ps1 -Strict`) so no machine-specific markers —

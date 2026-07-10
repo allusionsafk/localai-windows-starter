@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +19,7 @@ def _patch_live(
     warm: tuple[int, list[str]] = (0, ["[warm] ok"]),
     anywhere: tuple[int, list[str]] = (0, ["[anywhere] ok"]),
     health: tuple[int, list[str]] = (0, ["[health] ok"]),
+    tailscale: bool = True,
 ) -> None:
     """Stub every external touchpoint so the live orchestration can be unit-tested."""
     monkeypatch.setattr(start, "_ollama_api_ready", lambda *a, **k: ollama)
@@ -33,6 +35,9 @@ def _patch_live(
     monkeypatch.setattr(start, "collect_model_aliases_report", lambda *a, **k: alias)
     monkeypatch.setattr(start, "collect_warm_report", lambda *a, **k: warm)
     monkeypatch.setattr(start, "collect_anywhere_report", lambda *a, **k: anywhere)
+    monkeypatch.setattr(
+        start, "resolve_tailscale", lambda: Path("ts.exe") if tailscale else None
+    )
     monkeypatch.setattr(start, "collect_health_report", lambda *a, **k: health)
 
 
@@ -153,6 +158,19 @@ def test_start_live_tailscale_failure_is_non_fatal(
 
     assert code == 0
     assert any("Tailscale Serve reported a problem" in line for line in lines)
+
+
+def test_start_live_skips_remote_when_tailscale_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A friend without Tailscale gets one calm line, not a wall of FAILs.
+    _patch_live(monkeypatch, tailscale=False, anywhere=(1, ["serve failed"]))
+    code, lines = start.collect_start_report()
+
+    assert code == 0
+    assert any("Remote access (optional)" in line for line in lines)
+    assert not any("reported a problem" in line for line in lines)
+    assert not any("serve failed" in line for line in lines)
 
 
 def test_start_dry_run_preserves_batch_launcher_order() -> None:

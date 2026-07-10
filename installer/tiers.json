@@ -6,12 +6,13 @@
   "kv_dtype_factor": {"f16": 1.0, "q8_0": 0.5},
   "kv_dtype_default": "q8_0",
   "//kv_dtype": "installer sets OLLAMA_KV_CACHE_TYPE=q8_0 host-side (ref-box #1); tier gates assume q8_0. C caps at 3B: 4B@8k = 4.34 GB > 4 even at q8_0.",
+  "//pick": "Per-tier chat model the installer actually pulls (Install-LocalAI Invoke-PhaseScout). source = a real Ollama tag; ctx <= tier ctx; params(source) <= max_dense_b so the pick fits min_vram_gb at q8_0 KV (guarded by test_each_tier_pick_fits_min_vram). Whole ladder is the qwen3.5 thinking family (9b / 4b / 2b) so webui-seed's unconditional think=false + presence_penalty tune is valid on every pick (findings 2+3); smaller tags for B/C/CPU so a 4 GB friend never gets the 9.5 GB daily driver.",
   "tiers": [
-    {"id": "S",   "min_vram_gb": 16, "max_dense_b": 14, "ctx": 32768, "example": "qwen2.5:14b class"},
-    {"id": "A",   "min_vram_gb": 12, "max_dense_b": 9,  "ctx": 32768, "example": "qwen3.5:9b-32k"},
-    {"id": "B",   "min_vram_gb": 8,  "max_dense_b": 7,  "ctx": 16384, "example": "qwen2.5:7b class"},
-    {"id": "C",   "min_vram_gb": 4,  "max_dense_b": 3,  "ctx": 8192,  "example": "qwen2.5:3b class"},
-    {"id": "CPU", "min_vram_gb": 0,  "max_dense_b": 4,  "ctx": 8192,  "example": "qwen 4B-A0.6 class", "warn": "CPU-only: slow, small models only"}
+    {"id": "S",   "min_vram_gb": 16, "max_dense_b": 14, "ctx": 32768, "example": "qwen2.5:14b class",  "pick": {"source": "qwen3.5:9b", "ctx": 32768}},
+    {"id": "A",   "min_vram_gb": 12, "max_dense_b": 9,  "ctx": 32768, "example": "qwen3.5:9b-32k",     "pick": {"source": "qwen3.5:9b", "ctx": 32768}},
+    {"id": "B",   "min_vram_gb": 8,  "max_dense_b": 7,  "ctx": 16384, "example": "qwen3.5:4b-16k",     "pick": {"source": "qwen3.5:4b", "ctx": 16384}},
+    {"id": "C",   "min_vram_gb": 4,  "max_dense_b": 3,  "ctx": 8192,  "example": "qwen3.5:2b-8k",      "pick": {"source": "qwen3.5:2b", "ctx": 8192}},
+    {"id": "CPU", "min_vram_gb": 0,  "max_dense_b": 4,  "ctx": 8192,  "example": "qwen3.5:2b-8k",      "warn": "CPU-only: slow, small models only", "pick": {"source": "qwen3.5:2b", "ctx": 8192}}
   ],
   "intents": {
     "chat":   {"categories": ["chat"]},

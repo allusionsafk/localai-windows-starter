@@ -41,6 +41,9 @@ localai = ["static/*"]
 [tool.pytest.ini_options]
 addopts = ["-p", "no:cacheprovider"]
 testpaths = ["tests"]
+# Always test THIS checkout's src, not whichever editable `localai` install
+# happens to be on the box (which can silently shadow it).
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 88

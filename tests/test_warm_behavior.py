@@ -144,6 +144,49 @@ def test_warm_defaults_follow_legacy_model_rules() -> None:
     assert warm.resolve_num_ctx("qwen2.5-grounded", 1234) == 1234
 
 
+def test_replace_default_model_makes_readers_see_the_installed_pick() -> None:
+    # Finding 1: the installer picks a per-tier tag but compose hardcodes the
+    # daily driver, so warm/health/model-scout all warm a model a non-A box does
+    # not have. Rewriting the one literal makes every DEFAULT_MODELS= reader agree.
+    compose = """
+    services:
+      open-webui:
+        environment:
+          - DEFAULT_MODELS=qwen3.5:9b-32k
+          - WEBUI_AUTH=False
+    """
+
+    out = warm.replace_default_model(compose, "qwen3.5:4b-16k")
+
+    assert warm.read_default_model(out) == "qwen3.5:4b-16k"
+    assert "qwen3.5:9b-32k" not in out  # the stale literal is gone
+    # untouched lines survive (only the one value changed)
+    assert "WEBUI_AUTH=False" in out
+    assert "open-webui" in out
+
+
+def test_replace_default_model_raises_when_marker_absent() -> None:
+    # A compose without the marker is broken; surface it (Fable's throw-on-failure
+    # contract) rather than silently writing nothing.
+    with pytest.raises(ValueError):
+        warm.replace_default_model("services:\n  open-webui: {}\n", "qwen3.5:2b-8k")
+
+
+def test_cli_set_default_model_command_registered() -> None:
+    # The installer calls `localai set-default-model --model <tag>`; it must exist
+    # with the --model option or the compose rewrite phase silently no-ops.
+    import inspect
+
+    from localai import cli
+
+    cmd = next(
+        info.callback
+        for info in cli.app.registered_commands
+        if info.callback and info.callback.__name__ == "set_default_model"
+    )
+    assert "model" in inspect.signature(cmd).parameters
+
+
 def test_warm_skip_if_any_loaded_preserves_existing_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

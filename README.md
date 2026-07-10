@@ -37,10 +37,38 @@ This stack is **loopback-only and manual-start by design**:
 
 ## Quick start
 
-### Guided installer (recommended)
+### Easiest: double-click (no PowerShell needed)
+
+1. Download **`Install Local AI.cmd`** from the
+   [latest release](https://github.com/allusionsafk/localai-windows-starter/releases/latest).
+2. Double-click it. Windows shows a security box because the file was downloaded —
+   click **More info → Run anyway** (blue box) or **Run** (yellow box). This is
+   expected; it's a short script you can open in Notepad first to read.
+   If there is **no "Run anyway" option at all**, your PC has **Smart App Control**
+   turned on, which blocks unsigned scripts outright — turn it off under Windows
+   Security → App & browser control → Smart App Control, or use the PowerShell
+   method below.
+3. Follow the on-screen prompts. It picks models that fit *your* PC and sets
+   everything up. When it finishes, your chat is at http://127.0.0.1:3000.
+
+After setup, double-click **`Start Local AI.cmd`** / **`Stop Local AI.cmd`** to
+start and stop it — no typing. Both live next to the installed repo at
+**`%USERPROFILE%\localai`** (e.g. `C:\Users\You\localai\Start Local AI.cmd`).
+
+### Guided installer (PowerShell)
 
 The Friend Bootstrapper vets your hardware, picks fitting models, brings up the
-stack loopback-only, and hands off to health checks. From a PowerShell prompt:
+stack loopback-only, and hands off to health checks.
+
+On a machine that doesn't have this repo yet, open **Windows PowerShell**
+(press Start, type "powershell", press Enter) and paste these two lines:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1 -OutFile "$env:TEMP\localai-bootstrap.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\localai-bootstrap.ps1"
+```
+
+If you already cloned the repo, run it from the checkout instead:
 
 ```powershell
 # If you already have PowerShell 7:

@@ -34,6 +34,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 on older Win10 builds may not offer TLS 1.2 by
+# default, which GitHub requires; opting in is harmless where it already is.
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+  [Net.ServicePointManager]::SecurityProtocol = `
+    [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
+
 if (-not $AllowUnverified -and -not $ExpectedCommit -and -not $ExpectedZipSha256) {
   throw @"
 This bootstrap is not yet pinned for distribution ($Owner/$Repo@$Ref).
@@ -55,6 +62,9 @@ function Install-Pwsh7 {
   Write-Host 'Installing PowerShell 7 via winget...' -ForegroundColor Cyan
   & $winget.Source install --id 'Microsoft.PowerShell' -e `
     --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) {
+    throw "winget could not install PowerShell 7 (exit $LASTEXITCODE). Install it from https://aka.ms/powershell-release then re-run this script."
+  }
 }
 
 function Get-Repo {
@@ -67,11 +77,30 @@ function Get-Repo {
   $parentResolved = (Resolve-Path -LiteralPath $parent).Path
 
   $git = Get-Command 'git.exe' -ErrorAction SilentlyContinue
-  if ($git) {
-    if (Test-Path -LiteralPath (Join-Path $Into '.git')) {
-      Write-Host "Repo already present at $Into; skipping clone." -ForegroundColor DarkGray
+  if (Test-Path -LiteralPath (Join-Path $Into '.git')) {
+    # Re-run over an existing clone: re-verify the pin instead of trusting it,
+    # but never delete a folder this run did not create.
+    Write-Host "Repo already present at $Into; skipping clone." -ForegroundColor DarkGray
+    if ($git -and $ExpectedCommit) {
+      $head = (& $git.Source -C $Into rev-parse HEAD).Trim()
+      if ($head -ne $ExpectedCommit) {
+        throw "Existing folder $Into is at commit $head, not the pinned $ExpectedCommit. Rename or delete that folder, then re-run to get a verified copy."
+      }
+      Write-Host "Verified existing commit $head." -ForegroundColor Green
+    }
+    return
+  }
+  if (Test-Path -LiteralPath $Into) {
+    # A non-git folder is already there. Reuse it only if it looks like this
+    # repo (e.g. a completed zip install); otherwise ask the user to move it -
+    # never silently delete their folder.
+    if (Test-Path -LiteralPath (Join-Path $Into (Join-Path 'installer' 'Install-LocalAI.ps1'))) {
+      Write-Host "Folder already present at $Into; using it." -ForegroundColor DarkGray
       return
     }
+    throw "Folder $Into already exists but does not look like a $Repo download. Rename or delete it, then re-run."
+  }
+  if ($git) {
     & $git.Source clone --depth 1 --branch $Ref "https://github.com/$Owner/$Repo.git" $Into
     if ($LASTEXITCODE -ne 0) { throw "git clone failed (exit $LASTEXITCODE)." }
     if ($ExpectedCommit) {
@@ -91,15 +120,22 @@ function Get-Repo {
   # escaping the destination parent (pattern from Install-Nanobrowser.ps1).
   $zip = Join-Path $parentResolved "$Repo-$Ref.zip"
   $extract = Join-Path $parentResolved "$Repo-extract"
+  $parentPrefix = $parentResolved.TrimEnd('\') + '\'
   foreach ($path in @($zip, $extract, $Into)) {
     $full = [System.IO.Path]::GetFullPath($path)
-    if (-not $full.StartsWith("$parentResolved\", [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $full.StartsWith($parentPrefix, [StringComparison]::OrdinalIgnoreCase)) {
       throw "Refusing to write outside ${parentResolved}: $full"
     }
   }
   $url = "https://github.com/$Owner/$Repo/archive/refs/tags/$Ref.zip"
   Write-Host "Downloading $url ..." -ForegroundColor Cyan
-  Invoke-WebRequest -Uri $url -OutFile $zip -TimeoutSec 180
+  $oldProgress = $ProgressPreference
+  $ProgressPreference = 'SilentlyContinue'  # 5.1 progress rendering slows downloads badly
+  try {
+    Invoke-WebRequest -Uri $url -OutFile $zip -TimeoutSec 180
+  } finally {
+    $ProgressPreference = $oldProgress
+  }
   if ($ExpectedZipSha256) {
     $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
     if ($actual -ne $ExpectedZipSha256.ToUpperInvariant()) {
@@ -115,7 +151,6 @@ function Get-Repo {
   Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
   $inner = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
   if (-not $inner) { throw 'Downloaded zip had no top-level folder.' }
-  if (Test-Path -LiteralPath $Into) { Remove-Item -LiteralPath $Into -Recurse -Force }
   Move-Item -LiteralPath $inner.FullName -Destination $Into
   Remove-Item -LiteralPath $zip, $extract -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -124,17 +159,25 @@ function Get-Repo {
 Get-Repo -Into $Destination
 
 # 2. Hand off to the orchestrator under pwsh 7.
-$orchestrator = Join-Path $Destination 'installer' 'Install-LocalAI.ps1'
+# NOTE: 5.1-safe nested Join-Path; the 3-argument form is PowerShell 7 only.
+$orchestrator = Join-Path $Destination (Join-Path 'installer' 'Install-LocalAI.ps1')
 if (-not (Test-Path -LiteralPath $orchestrator)) {
   throw "Orchestrator not found at $orchestrator - download may be incomplete."
 }
 
 if (-not (Test-Pwsh7)) { Install-Pwsh7 }
-$pwsh = (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue)
-if (-not $pwsh) {
-  throw 'PowerShell 7 still not found after install. Open a new terminal and run the orchestrator manually.'
+# A just-installed pwsh is not on this process's stale PATH yet: refresh from
+# the registry, then fall back to the default install location.
+$env:Path = @(
+  [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+  [Environment]::GetEnvironmentVariable('Path', 'User')
+) -join ';'
+$pwsh = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
+$pwshPath = if ($pwsh) { $pwsh.Source } else { Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe' }
+if (-not (Test-Path -LiteralPath $pwshPath)) {
+  throw "PowerShell 7 was installed but could not be located yet. Close this window, open a new one, and run:`n  pwsh -ExecutionPolicy Bypass -File `"$orchestrator`""
 }
 
 Write-Host "Launching the guided installer under PowerShell 7..." -ForegroundColor Cyan
-& $pwsh.Source -NoProfile -ExecutionPolicy Bypass -File $orchestrator @InstallerArgs
+& $pwshPath -NoProfile -ExecutionPolicy Bypass -File $orchestrator @InstallerArgs
 exit $LASTEXITCODE

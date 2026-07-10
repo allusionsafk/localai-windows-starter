@@ -175,7 +175,10 @@ function Get-VetVramGb {
   if ($out.Code -ne 0 -or -not $out.Text) { return $null }
   $first = ($out.Text -split "`n")[0].Trim()
   $mib = 0.0
-  if (-not [double]::TryParse($first, [ref]$mib)) { return $null }
+  # Invariant culture: TryParse honours the OS locale by default, and e.g. a
+  # comma decimal separator would silently mis-parse on non-en-US Windows.
+  if (-not [double]::TryParse($first, [System.Globalization.NumberStyles]::Float,
+      [System.Globalization.CultureInfo]::InvariantCulture, [ref]$mib)) { return $null }
   return [math]::Round($mib / 1024, 1)
 }
 

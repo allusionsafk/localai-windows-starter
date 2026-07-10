@@ -24,7 +24,7 @@ from localai.start import collect_start_report
 from localai.stop import collect_stop_report
 from localai.terminal_check import collect_terminal_check_report
 from localai.update import collect_update_report
-from localai.warm import collect_warm_report
+from localai.warm import collect_set_default_model_report, collect_warm_report
 from localai.webui_seed import collect_webui_seed_report
 
 app = typer.Typer(
@@ -457,6 +457,28 @@ def webui_seed(
         dry_run=dry_run,
         timeout_sec=timeout_sec,
     )
+    for line in lines:
+        typer.echo(line)
+    raise typer.Exit(code=code)
+
+
+@app.command()
+def set_default_model(
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Tag to write as docker-compose.yml DEFAULT_MODELS "
+            "(the installer's per-tier pick).",
+        ),
+    ],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print what would change without writing."),
+    ] = False,
+) -> None:
+    """Rewrite docker-compose.yml DEFAULT_MODELS so every reader sees the pick."""
+    code, lines = collect_set_default_model_report(model, dry_run=dry_run)
     for line in lines:
         typer.echo(line)
     raise typer.Exit(code=code)

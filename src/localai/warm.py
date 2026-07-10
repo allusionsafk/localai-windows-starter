@@ -180,6 +180,46 @@ def read_default_model(compose_text: str | None = None) -> str:
     return match.group(1) if match else DEFAULT_MODEL
 
 
+def replace_default_model(compose_text: str, model: str) -> str:
+    """Return ``compose_text`` with the ``DEFAULT_MODELS=`` value set to ``model``.
+
+    The installer picks a per-tier tag, but the repo compose hardcodes the tier-A
+    daily driver; rewriting this one literal is what makes every reader that regexes
+    ``DEFAULT_MODELS=`` (warm.read_default_model, health, model_scout.baseline_model)
+    plus Open WebUI's own env see the model that was actually pulled (finding 1).
+    """
+    new_text, count = re.subn(
+        r"DEFAULT_MODELS=\S+",
+        lambda _m: f"DEFAULT_MODELS={model}",
+        compose_text,
+    )
+    if count == 0:
+        raise ValueError("DEFAULT_MODELS= not found in docker-compose.yml")
+    return new_text
+
+
+def collect_set_default_model_report(
+    model: str, *, dry_run: bool = False
+) -> tuple[int, list[str]]:
+    """Rewrite docker-compose.yml's DEFAULT_MODELS to ``model`` (installer step)."""
+    path = repo_path("docker-compose.yml")
+    try:
+        compose_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return 1, [f"ERROR: cannot read {path}: {exception_message(exc)}"]
+    try:
+        new_text = replace_default_model(compose_text, model)
+    except ValueError as exc:
+        return 1, [f"ERROR: {exc}"]
+    if dry_run:
+        return 0, [f"[set-default-model] would set DEFAULT_MODELS={model} in {path}"]
+    try:
+        path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        return 1, [f"ERROR: cannot write {path}: {exception_message(exc)}"]
+    return 0, [f"[set-default-model] DEFAULT_MODELS={model}"]
+
+
 def resolve_num_ctx(model: str, num_ctx: int) -> int:
     if num_ctx > 0:
         return num_ctx

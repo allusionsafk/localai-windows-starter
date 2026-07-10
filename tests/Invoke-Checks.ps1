@@ -77,7 +77,13 @@ if ($docker -and (Test-Path $compose)) {
 }
 
 # 5. Dashboard self-test (config wiring) must report 0 FAIL.
+#    AI-Dashboard.ps1 is not part of the public starter; skip both dashboard
+#    gates when it is absent so the shipped checkout's gate can pass.
 $dash = Join-Path $Root 'AI-Dashboard.ps1'
+if (-not (Test-Path -LiteralPath $dash)) {
+    Add-Result 'Dashboard self-test' $true 'SKIPPED (AI-Dashboard.ps1 not in this checkout)'
+    Add-Result 'Regression: $args footgun' $true 'SKIPPED (AI-Dashboard.ps1 not in this checkout)'
+} else {
 $pwsh = (Get-Process -Id $PID).Path
 $stOut = & $pwsh -NoProfile -STA -ExecutionPolicy Bypass -File $dash -SelfTest 2>&1
 Add-Result 'Dashboard self-test' ($LASTEXITCODE -eq 0) (("$stOut" -split "`n" | Where-Object { $_ -match 'Summary' } | Select-Object -First 1))
@@ -99,6 +105,7 @@ try {
 } catch {
     Add-Result 'Regression: $args footgun' $false $_.Exception.Message
 }
+}
 
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
@@ -107,6 +114,8 @@ if ($SkipAnalyzer) {
     Add-Result 'Static analysis' $true 'SKIPPED (-SkipAnalyzer)'
 } elseif (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
     Add-Result 'Static analysis' $true 'SKIPPED (PSScriptAnalyzer not installed)'
+} elseif (-not (Test-Path (Join-Path $Root 'PSScriptAnalyzerSettings.psd1'))) {
+    Add-Result 'Static analysis' $true 'SKIPPED (PSScriptAnalyzerSettings.psd1 not in this checkout)'
 } else {
     Import-Module PSScriptAnalyzer
     $settings = Join-Path $Root 'PSScriptAnalyzerSettings.psd1'

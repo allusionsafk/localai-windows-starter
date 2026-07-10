@@ -48,6 +48,65 @@ def test_every_tier_fits_its_own_min_vram_at_q8_0() -> None:
         )
 
 
+def _pick_params_b(source: str) -> float:
+    """Billions of params from an Ollama tag's size suffix, e.g. qwen3.5:9b -> 9."""
+    import re
+
+    size = source.split(":")[-1]
+    match = re.match(r"(\d+(?:\.\d+)?)b", size)
+    assert match, f"cannot parse params from pick source {source!r}"
+    return float(match.group(1))
+
+
+def test_each_tier_pick_fits_min_vram() -> None:
+    """The blocker this release fixes: the installer must pull a model that FITS
+    the vetted tier. A 4 GB / CPU box must never get the 9.5 GB daily driver."""
+    tiers = installer_vet.load_tiers()
+    for tier in tiers["tiers"]:
+        pick = tier["pick"]
+        params_b = _pick_params_b(pick["source"])
+        fit = installer_vet.fit_gb(
+            params_b, ctx=pick["ctx"], tiers=tiers, kv_dtype="q8_0"
+        )
+        # CPU has no VRAM gate, but its pick must still stay small (RAM-bound).
+        gate = tier["min_vram_gb"] or 6.0
+        assert fit <= gate, (
+            f"tier {tier['id']} pick {pick['source']}@{pick['ctx']} "
+            f"= {fit} GB > {gate} GB gate"
+        )
+
+
+def test_every_tier_pick_is_qwen3_family_so_think_seed_is_valid() -> None:
+    """Findings 2+3: webui-seed unconditionally seeds think=false + presence_penalty
+    (a Qwen3 thinking tune) onto the installer's pick. If a tier picks a non-thinking
+    qwen2.5 model, some Ollama versions 400 on the ``think`` field and every low-tier
+    chat breaks. Pin the whole ladder to the qwen3 thinking family so the seed the
+    installer always sends is always valid for the model it pulled."""
+    tiers = installer_vet.load_tiers()
+    for tier in tiers["tiers"]:
+        source = tier["pick"]["source"]
+        assert source.startswith("qwen3"), (
+            f"tier {tier['id']} pick {source} is not a qwen3-family thinking model; "
+            "webui-seed's think=false + presence_penalty would break chat on it"
+        )
+
+
+def test_each_tier_pick_respects_tier_limits() -> None:
+    """A pick may not exceed its tier's parameter ceiling or context ceiling, and
+    must be a real Ollama tag (has a ``:`` size)."""
+    tiers = installer_vet.load_tiers()
+    for tier in tiers["tiers"]:
+        pick = tier["pick"]
+        assert _pick_params_b(pick["source"]) <= tier["max_dense_b"], (
+            f"tier {tier['id']} pick {pick['source']} exceeds "
+            f"max_dense_b {tier['max_dense_b']}"
+        )
+        assert pick["ctx"] <= tier["ctx"], (
+            f"tier {tier['id']} pick ctx {pick['ctx']} > tier ctx {tier['ctx']}"
+        )
+        assert ":" in pick["source"]  # a real Ollama tag, e.g. qwen3.5:9b
+
+
 def test_reference_box_9b_at_32k_needs_q8_0() -> None:
     """The daily driver (9B@32k, tier A) fits 12 GB only with q8_0 KV; at f16 it
     spills. This pins why the installer must set OLLAMA_KV_CACHE_TYPE=q8_0."""

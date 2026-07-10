@@ -149,13 +149,20 @@ function Invoke-PhaseScout {
     $out = Invoke-Localai -Arguments $scoutArgs -TimeoutSec 300
     Write-Host $out.Text
   }
-  # v1: default the chat pick to the tier's example; scout output above informs a
-  # manual override. Parsing scout's grouped picks into state is a follow-up.
-  $chat = ($Tiers.tiers | Where-Object { $_.id -eq $State.hardware.tier }).example
+  # Pick the model for the VETTED tier, not a fixed daily-driver: a 4 GB / CPU
+  # box must NOT get the 9.5 GB qwen3.5:9b (it would spill or fail to load).
+  # tiers.json carries a per-tier `pick` (source + ctx) proven to fit that tier's
+  # VRAM (test_each_tier_pick_fits_min_vram). Scout output above informs a manual
+  # override; parsing scout's grouped picks into state is a follow-up.
+  $tier = $Tiers.tiers | Where-Object { $_.id -eq $State.hardware.tier }
+  $pick = $tier.pick
+  $ctxK = [int]($pick.ctx / 1024)
+  $tag = "$($pick.source)-${ctxK}k"
   $State.models = [pscustomobject]@{
-    chat = [pscustomobject]@{ tag = 'qwen3.5:9b-32k'; source = 'qwen3.5:9b'; num_ctx = $State.hardware.ctx }
+    chat = [pscustomobject]@{ tag = $tag; source = $pick.source; num_ctx = $pick.ctx }
   }
-  Write-Card 'Phase 3 - Picks' @("chat -> qwen3.5:9b-32k @ $($State.hardware.ctx) ctx  (tier example: $chat)")
+  Write-Card 'Phase 3 - Picks' @(
+    "chat -> $tag   (source $($pick.source) @ $($pick.ctx) ctx, tier $($State.hardware.tier))")
 }
 
 function Invoke-PhaseOllamaDocker {
@@ -190,10 +197,25 @@ function Invoke-PhasePulls {
   if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
     $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
     if (-not $ollama) { throw 'ollama not on PATH; open a new shell and -Resume.' }
-    [void](Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('pull', $State.models.chat.source) -TimeoutSec 3600)
-    $mf = Join-Path $RepoRoot 'qwen-32k.Modelfile'
-    if (Test-Path -LiteralPath $mf) {
-      [void](Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('create', $State.models.chat.tag, '-f', $mf) -TimeoutSec 600 -WorkingDirectory $RepoRoot)
+    # Invoke-AiProcess never throws, so a failed pull/create must be surfaced
+    # here or the phase is marked done with no model on the box.
+    $pull = Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('pull', $State.models.chat.source) -TimeoutSec 3600
+    if ($pull.Code -ne 0) {
+      $tail = (($pull.Text -split "`r?`n") | Select-Object -Last 4) -join ' | '
+      throw "ollama pull $($State.models.chat.source) failed (exit $($pull.Code)): $tail"
+    }
+    # Build the picked model's Modelfile on the fly (FROM <source> + the tier's
+    # num_ctx) so every tier gets a right-sized context, not a fixed 32k file
+    # that would over-reserve KV on a smaller box. Written to TEMP; no dependency
+    # on a repo Modelfile that bakes 32k.
+    $mfName = 'localai-' + ($State.models.chat.tag -replace '[:\\/]', '-') + '.Modelfile'
+    $mfPath = Join-Path ([System.IO.Path]::GetTempPath()) $mfName
+    "FROM $($State.models.chat.source)`nPARAMETER num_ctx $($State.models.chat.num_ctx)" |
+      Set-Content -LiteralPath $mfPath -Encoding ascii
+    $create = Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('create', $State.models.chat.tag, '-f', $mfPath) -TimeoutSec 600 -WorkingDirectory $RepoRoot
+    if ($create.Code -ne 0) {
+      $tail = (($create.Text -split "`r?`n") | Select-Object -Last 4) -join ' | '
+      throw "ollama create $($State.models.chat.tag) failed (exit $($create.Code)): $tail"
     }
     # --lenient: a fresh box has only the picked model(s), not this repo's full
     # zoo, so missing alias sources must be skipped, not fatal (finding 2).
@@ -204,8 +226,17 @@ function Invoke-PhasePulls {
 function Invoke-PhaseCompose {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 4d - Compose up' @('write .env (SEARXNG_SECRET); localai start')
+  Write-Card 'Phase 4d - Compose up' @(
+    'point DEFAULT_MODELS at the pick; write .env (SEARXNG_SECRET); localai start')
   if ($PSCmdlet.ShouldProcess('.env + stack', 'write .env and localai start')) {
+    # This repo's compose hardcodes the tier-A daily driver; rewrite it to the
+    # model we actually pulled so warm/health/model-scout AND Open WebUI's env all
+    # see the pick (finding 1), instead of forever warming a model a smaller box
+    # does not have. A silent failure here resurrects the bug, so surface it.
+    $setDefault = Invoke-Localai -Arguments @('set-default-model', '--model', $State.models.chat.tag)
+    if ($setDefault.Code -ne 0) {
+      throw "set-default-model $($State.models.chat.tag) failed (exit $($setDefault.Code)): $($setDefault.Text)"
+    }
     $envPath = Join-Path $RepoRoot '.env'
     if (-not (Test-Path -LiteralPath $envPath)) {
       $secret = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
@@ -235,19 +266,35 @@ function Invoke-PhaseSecure {
     'ai-firewall -Apply (block physical-adapter ports); WinNAT :3000 fix if reserved',
     'Loopback-only binds verified; NO LAN exposure; NO autostart registered')
   if ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply')) {
-    [void](Invoke-AiProcess -FilePath 'pwsh' -ArgumentList @(
+    # ai-firewall exits 0 OK / 1 warnings / 2 failures; UAC decline or timeout
+    # must not silently pass as "secured".
+    $fw = Invoke-AiProcess -FilePath 'pwsh' -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', (Join-Path $RepoRoot 'ai-firewall.ps1'), '-Apply') -TimeoutSec 120 -WorkingDirectory $RepoRoot)
+        '-File', (Join-Path $RepoRoot 'ai-firewall.ps1'), '-Apply') -TimeoutSec 300 -WorkingDirectory $RepoRoot
+    if ($fw.Code -gt 1) {
+      Write-Host '   WARN: firewall hardening did not complete (was the admin prompt declined?).' -ForegroundColor Yellow
+      Write-Host '   You can apply it any time with:  pwsh -File ai-firewall.ps1 -Apply' -ForegroundColor Yellow
+    }
   }
-  # WinNAT :3000 reservation only collides sometimes; probe before touching it.
+  # WinNAT's dynamic port pool sometimes reserves 3000 after a reboot, which
+  # blocks Docker's 127.0.0.1:3000 publish. Detect it and explain the fix (it
+  # needs an Administrator shell, so we do not attempt it silently here).
   $reserved = (Invoke-AiProcess -FilePath 'netsh' -ArgumentList @(
       'int', 'ipv4', 'show', 'excludedportrange', 'protocol=tcp') -TimeoutSec 20).Text
-  if ($reserved -notmatch '(?m)^\s*3000\s') {
-    if ($PSCmdlet.ShouldProcess('WinNAT :3000', 'add excludedportrange')) {
-      [void](Invoke-AiProcess -FilePath 'pwsh' -ArgumentList @(
-          '-NoProfile', '-ExecutionPolicy', 'Bypass',
-          '-File', (Join-Path $RepoRoot 'logs' 'winnat-fix.ps1')) -TimeoutSec 60 -WorkingDirectory $RepoRoot)
+  $port3000Reserved = $false
+  foreach ($line in ($reserved -split "`r?`n")) {
+    if ($line -match '^\s*(\d+)\s+(\d+)' -and 3000 -ge [int]$Matches[1] -and 3000 -le [int]$Matches[2]) {
+      $port3000Reserved = $true
+      break
     }
+  }
+  if ($port3000Reserved) {
+    Write-Card 'Port 3000 is reserved by Windows' @(
+      'Windows (WinNAT) has reserved port 3000, which the chat UI needs.',
+      'Fix it from an Administrator PowerShell, then re-run with -Resume:',
+      '  net stop winnat',
+      '  netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=1',
+      '  net start winnat')
   }
 }
 
@@ -266,7 +313,7 @@ function Invoke-PhaseSelfTest {
   Write-Card 'localai is ready' @(
     'Chat:   http://127.0.0.1:3000        (first signup becomes admin)',
     'Search: http://127.0.0.1:8080',
-    'Start / stop:  Start-LocalAI.bat  /  Stop-LocalAI.bat   (or  localai start|stop)',
+    'Start / stop:  localai start  /  localai stop   (in any terminal)',
     'Change model:  Open WebUI dropdown, or  localai warm --model <id>',
     'Security: loopback-only, firewall-blocked on physical adapters, no autostart.')
 }

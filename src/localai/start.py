@@ -12,7 +12,7 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from localai.anywhere import collect_anywhere_report
+from localai.anywhere import collect_anywhere_report, resolve_tailscale
 from localai.compose import docker_env
 from localai.health import collect_health_report
 from localai.model_aliases import collect_model_aliases_report
@@ -113,13 +113,21 @@ def _live_start(*, no_open: bool) -> tuple[int, list[str]]:
     )
     lines.extend(_indent(warm_lines))
 
-    lines.append("[8/9] Tailscale Serve")
-    aw_code, aw_lines = collect_anywhere_report(apply=True)
-    lines.extend(_indent(aw_lines))
-    if aw_code != 0:
+    lines.append("[8/9] Remote access (optional)")
+    if resolve_tailscale() is None:
+        # A friend without Tailscale should not see a wall of scary FAILs on every
+        # start. Local chat works fully; remote access is a separate opt-in.
         lines.append(
-            "  WARN: Tailscale Serve reported a problem; local chat still works."
+            "  Not set up - optional. Local chat works fully; to reach it from "
+            "your phone later, see ai-anywhere (Tailscale)."
         )
+    else:
+        aw_code, aw_lines = collect_anywhere_report(apply=True)
+        lines.extend(_indent(aw_lines))
+        if aw_code != 0:
+            lines.append(
+                "  WARN: Tailscale Serve reported a problem; local chat still works."
+            )
 
     lines.append("[9/9] Health check and final warm")
     health_code, health_lines = collect_health_report()
@@ -167,8 +175,8 @@ def _dry_run_report(*, no_open: bool) -> tuple[int, list[str]]:
         "  would run: localai model-aliases",
         "[7/9] Warm default model",
         "  would run: localai warm --unload-others --skip-if-any-loaded",
-        "[8/9] Tailscale Serve",
-        "  would run: localai anywhere --apply",
+        "[8/9] Remote access (optional)",
+        "  would run: localai anywhere --apply  (only if Tailscale is installed)",
         "[9/9] Health check and final warm",
         "  would run: localai health",
         "  would run: localai warm --unload-others --skip-if-any-loaded",
