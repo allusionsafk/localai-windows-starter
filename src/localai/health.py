@@ -463,7 +463,12 @@ def check_terminal_launchers(add_line: AddLine) -> None:
         "Stop-LocalAI.bat",
         "AI-Game-Mode.bat",
     )
-    missing = [name for name in names if not repo_path(name).exists()]
+    present = [name for name in names if repo_path(name).exists()]
+    # P1.4: none present -> these launchers were never shipped to this box; stay
+    # silent. Some-but-not-all -> a real gap on a box that has the rest -> WARN.
+    if not present:
+        return
+    missing = [name for name in names if name not in present]
     if missing:
         add_line("WARN", "Terminal launchers", "missing: " + ", ".join(missing))
     else:
@@ -487,7 +492,11 @@ def check_terminal_commands(add_line: AddLine) -> None:
         "ai-game-mode.cmd",
         "ai-models.cmd",
     )
-    missing = [name for name in names if not (bin_dir / name).exists()]
+    present = [name for name in names if (bin_dir / name).exists()]
+    # P1.4: none present -> not shipped to this box; stay silent. Partial -> WARN.
+    if not present:
+        return
+    missing = [name for name in names if name not in present]
     if missing:
         add_line("WARN", "Terminal commands", "missing: " + ", ".join(missing))
     else:
@@ -505,8 +514,12 @@ def check_node_smoke(
 ) -> None:
     node = Path(os.environ.get("PROGRAMFILES", "")) / "nodejs" / "node.exe"
     script_path = repo_path(script)
-    if not node.exists() or not script_path.exists():
-        add_line("WARN", name, f"node.exe or {script} missing")
+    # P1.4: the .mjs harness is a private, unshipped artifact; on a friend box it
+    # is simply absent, so skip silently rather than adding to a WARN wall.
+    if not script_path.exists():
+        return
+    if not node.exists():
+        add_line("WARN", name, "node.exe missing")
         return
     result = run_command(
         [str(node), str(script_path)], cwd=REPO_ROOT, timeout_sec=timeout_sec
@@ -520,8 +533,8 @@ def check_node_smoke(
 
 def check_nanobrowser(add_line: AddLine, default_model: str) -> None:
     script = repo_path("test-browser-ai-provider.ps1")
+    # P1.4: unshipped optional harness -> silent on a friend box (no WARN wall).
     if not script.exists():
-        add_line("WARN", "Nanobrowser Ollama", "test-browser-ai-provider.ps1 missing")
         return
     result = run_command(
         [
@@ -563,8 +576,8 @@ def check_cherry_agent(add_line: AddLine) -> None:
         / "Cherry Studio"
         / "Cherry Studio.exe"
     )
+    # P1.4: unshipped optional harness -> silent on a friend box (no WARN wall).
     if not script.exists():
-        add_line("WARN", "Cherry agent", "test-cherry-agent.ps1 missing")
         return
     result = run_command(
         ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
@@ -713,8 +726,8 @@ def check_image_studio(add_line: AddLine) -> None:
         Path(os.environ.get("USERPROFILE", "")) / "imageai" / "Start-Image-Studio.bat"
     ).exists():
         add_line("OK", "Image studio", "optional launcher present; not running")
-    else:
-        add_line("WARN", "Image studio", "optional; launcher not found")
+    # P1.4: neither the service nor its optional launcher exists on a friend box;
+    # this is an opt-in extra, so skip silently rather than WARN.
 
 
 def check_gpu_memory(add_line: AddLine) -> None:

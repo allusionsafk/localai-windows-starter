@@ -139,6 +139,32 @@ def test_vet_capability_reports_tier_and_hardware() -> None:
     assert card["warnings"] == []
 
 
+def test_vet_capability_non_nvidia_dgpu_gets_one_honest_cpu_line() -> None:
+    """P1.6: a friend with an AMD/Intel dGPU has no NVIDIA VRAM -> CPU tier. Be
+    honest about WHY: their GPU won't be used, so it's CPU-only and slow. One line,
+    naming the GPU, not a generic 'no NVIDIA VRAM' that reads like a probe failure."""
+    card = installer_vet.vet_capability(
+        vram_gb=None, ram_gb=32.0, disk_free_gb=180.0, gpu="AMD Radeon RX 6700 XT"
+    )
+    assert card["tier"] == "CPU"
+    gpu_lines = [w for w in card["warnings"] if "NVIDIA" in w or "CPU" in w]
+    assert len(gpu_lines) == 1  # exactly one honest line, no generic+specific dupe
+    note = gpu_lines[0]
+    assert "Radeon" in note and "NVIDIA" in note and "slow" in note.lower()
+
+
+def test_vet_capability_cpu_without_dgpu_keeps_generic_line() -> None:
+    """No real GPU (or only a basic/virtual adapter) -> keep the generic CPU line;
+    never invent an AMD/Intel GPU that isn't there."""
+    for gpu in (None, "Microsoft Basic Display Adapter"):
+        card = installer_vet.vet_capability(
+            vram_gb=None, ram_gb=32.0, disk_free_gb=180.0, gpu=gpu
+        )
+        joined = " ".join(card["warnings"])
+        assert "CPU" in joined
+        assert "not an NVIDIA GPU" not in joined
+
+
 def test_vet_capability_warns_on_low_ram_and_disk() -> None:
     card = installer_vet.vet_capability(
         vram_gb=8.0, ram_gb=12.0, disk_free_gb=25.0, gpu="RTX 3060"

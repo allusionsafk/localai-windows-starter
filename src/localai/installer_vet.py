@@ -82,6 +82,42 @@ def classify_tier(
     return max(eligible, key=lambda tier: tier["min_vram_gb"])
 
 
+# A non-empty video-controller name is NVIDIA (usable) if it carries one of these.
+_NVIDIA_MARKERS = ("nvidia", "geforce", "rtx", "gtx", "quadro", "tesla")
+# ...and is not a real accelerator the user could expect to use if it looks like a
+# basic/virtual/remote display adapter.
+_NON_ACCELERATOR_MARKERS = (
+    "microsoft basic",
+    "basic display",
+    "basic render",
+    "remote display",
+    "virtual",
+    "vmware",
+    "citrix",
+    "parsec",
+)
+
+
+def non_nvidia_gpu_note(gpu: str | None, vram_gb: float | None) -> str | None:
+    """One honest line when the box has a real non-NVIDIA GPU but no usable NVIDIA
+    VRAM (P1.6). Ollama on Windows is CUDA-only, so an AMD/Intel dGPU sits idle and
+    the friend runs on CPU -- say so plainly instead of a generic 'no NVIDIA VRAM'
+    that reads like a detection failure. ``None`` when there's no such GPU."""
+    if vram_gb:  # usable NVIDIA VRAM -> normal GPU path, nothing to explain
+        return None
+    if not gpu:
+        return None
+    low = gpu.lower()
+    if any(marker in low for marker in _NVIDIA_MARKERS):
+        return None  # an NVIDIA card with no VRAM read is a driver issue, not this
+    if any(marker in low for marker in _NON_ACCELERATOR_MARKERS):
+        return None  # basic/virtual adapter, not a GPU the user expects to help
+    return (
+        f"{gpu} is not an NVIDIA GPU, which this stack requires — it will run on "
+        "CPU only, which is much slower."
+    )
+
+
 def vet_capability(
     *,
     vram_gb: float | None,
@@ -105,7 +141,10 @@ def vet_capability(
             "4-20 GB each, the model plan will be trimmed"
         )
     if tier["id"] == "CPU":
-        warnings.append(tier.get("warn") or "CPU-only tier: slow, small models only")
+        note = non_nvidia_gpu_note(gpu, vram_gb)
+        warnings.append(
+            note or tier.get("warn") or "CPU-only tier: slow, small models only"
+        )
     return {
         "tier": tier["id"],
         "vram_gb": vram_gb,

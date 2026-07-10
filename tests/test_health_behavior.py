@@ -218,3 +218,96 @@ def test_parse_ollama_list_names_adds_latest_alias() -> None:
         "qwen",
         "bare",
     }
+
+
+# ------------------------------------------------- P1.4: no WARN wall on a friend box
+
+
+def test_optional_artifact_checks_skip_silently_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """P1.4: the private test harnesses and launchers (Cherry MCP, MCP bundle,
+    nanobrowser, Cherry agent, terminal launchers/commands, image studio) are not
+    shipped in the public repo. On a friend box each such check must emit NOTHING
+    -- a clean self-test, not a wall of WARNs about files they were never given."""
+    import pathlib
+
+    empty = pathlib.Path(str(tmp_path))
+    monkeypatch.setattr(health, "repo_path", lambda name: empty / name)  # none exist
+    monkeypatch.setattr(health, "tcp_open", lambda *a, **k: False)  # no ComfyUI
+    monkeypatch.setenv("USERPROFILE", str(empty))  # no ~/.local/bin, no ~/imageai
+    monkeypatch.setenv("PROGRAMFILES", str(empty))  # no node.exe
+    monkeypatch.setenv("LOCALAPPDATA", str(empty))
+
+    lines: list[tuple[str, str, str]] = []
+    rec = lambda s, n, d: lines.append((s, n, d))  # noqa: E731
+
+    health.check_node_smoke(rec, "Cherry MCP", "test-filesystem-mcp.mjs", "x", "y")
+    health.check_node_smoke(rec, "MCP bundle", "test-mcp-bundle.mjs", "x", "y")
+    health.check_nanobrowser(rec, "qwen3.5:9b-32k")
+    health.check_cherry_agent(rec)
+    health.check_terminal_launchers(rec)
+    health.check_terminal_commands(rec)
+    health.check_image_studio(rec)
+
+    assert lines == []  # every optional check stayed silent
+
+
+def test_nanobrowser_present_but_failing_still_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """Don't weaken the maintainer box: when the harness IS present, a real failure
+    must still surface as a WARN (silence is only for the unshipped case)."""
+    import pathlib
+
+    root = pathlib.Path(str(tmp_path))
+    (root / "test-browser-ai-provider.ps1").write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(health, "repo_path", lambda name: root / name)
+    monkeypatch.setattr(
+        health, "run_command", lambda *a, **k: CommandResult(("x",), 1, "boom", "")
+    )
+
+    lines: list[tuple[str, str, str]] = []
+    health.check_nanobrowser(lambda s, n, d: lines.append((s, n, d)), "m")
+
+    assert lines and lines[0][0] == "WARN"
+
+
+def test_terminal_launchers_present_reports_ok_partial_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """Maintainer contract: all launchers present -> OK; some missing -> WARN;
+    none present (friend box) -> silent."""
+    import pathlib
+
+    root = pathlib.Path(str(tmp_path))
+    names = (
+        "Start-TerminalAI.ps1",
+        "Stop-LocalAI.ps1",
+        "Stop-AI-For-Gaming.ps1",
+        "Terminal-Code.bat",
+        "Terminal-DeepCode.bat",
+        "Stop-LocalAI.bat",
+        "AI-Game-Mode.bat",
+    )
+    monkeypatch.setattr(health, "repo_path", lambda name: root / name)
+
+    # all present -> OK
+    for name in names:
+        (root / name).write_text("x", encoding="utf-8")
+    lines: list[tuple[str, str, str]] = []
+    health.check_terminal_launchers(lambda s, n, d: lines.append((s, n, d)))
+    assert lines and lines[0][0] == "OK"
+
+    # one missing -> WARN (a real gap on a box that has the rest)
+    (root / names[0]).unlink()
+    lines.clear()
+    health.check_terminal_launchers(lambda s, n, d: lines.append((s, n, d)))
+    assert lines and lines[0][0] == "WARN"
+
+    # none present -> silent
+    for name in names[1:]:
+        (root / name).unlink()
+    lines.clear()
+    health.check_terminal_launchers(lambda s, n, d: lines.append((s, n, d)))
+    assert lines == []

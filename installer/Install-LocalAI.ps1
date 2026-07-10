@@ -90,7 +90,19 @@ function Invoke-PhaseVet {
   $warn = @()
   if ($ramGb -lt 16) { $warn += "RAM ${ramGb} GB < 16: Docker Desktop + WSL2 want 8+, expect pressure" }
   if ($diskGb -lt 40) { $warn += "Disk ${diskGb} GB free < 40: models are 4-20 GB each" }
-  if ($tier.id -eq 'CPU') { $warn += 'No NVIDIA VRAM detected: CPU tier, small models only, slow' }
+  if ($tier.id -eq 'CPU') {
+    # P1.6: be honest when a real non-NVIDIA dGPU is present - it can't be used
+    # (Ollama is CUDA-only), so name it and say CPU-only-and-slow rather than a
+    # generic "no NVIDIA VRAM" that reads like a probe failure. Mirrors
+    # installer_vet.non_nvidia_gpu_note.
+    if ($gpu -and
+        $gpu -notmatch '(?i)nvidia|geforce|rtx|gtx|quadro|tesla' -and
+        $gpu -notmatch '(?i)microsoft basic|basic display|basic render|remote display|virtual|vmware|citrix|parsec') {
+      $warn += "$gpu is not an NVIDIA GPU, which this stack requires - it will run on CPU only, which is much slower."
+    } else {
+      $warn += 'No NVIDIA VRAM detected: CPU tier, small models only, slow'
+    }
+  }
 
   $lines = @(
     "GPU:  $($gpu ?? 'none detected')   VRAM: $($vram ?? '?') GB",
