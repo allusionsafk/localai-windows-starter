@@ -1,13 +1,13 @@
 #requires -Version 7.0
 <#
-  ai-health-monitor.ps1 - Quiet monitor/self-heal wrapper around ai-health.ps1
-  and ai-perf.ps1.
+  ai-health-monitor.ps1 - Quiet monitor/self-heal wrapper around `localai
+  health` and ai-perf.ps1.
 
   Healthy runs are logged only. If health or performance drift checks fail,
-  optionally runs Start-LocalAI.bat /noopen once, checks again, and sends a
-  Windows notification only if still failed or if a repair was needed. Warnings
-  from ai-health.ps1 are not failures; ai-perf.ps1 runs in -Strict mode so
-  context/GPU drift is treated as actionable.
+  -Repair runs `localai start --no-open` once, checks again, and sends a
+  Windows notification only if still failed or if a repair was needed. Health
+  warnings are not failures; ai-perf.ps1 runs in -Strict mode so context/GPU
+  drift is treated as actionable.
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +26,6 @@ $LogFile = Join-Path $LogDir 'health-monitor.log'
 $StateFile = Join-Path $LogDir 'health-monitor-state.json'
 $Lock = Join-Path $LogDir '.health-monitor.lock'
 $Perf = Join-Path $Root 'ai-perf.ps1'
-$Starter = Join-Path $Root 'Start-LocalAI.bat'
 . (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
@@ -71,7 +70,7 @@ function Run-MonitorChecks {
   $parts = @()
   $code = 0
 
-  $health = Invoke-AiProcess 'python' @('-m', 'localai', 'health') $HealthTimeoutSec $Root
+  $health = Invoke-AiLocalai @('health') $HealthTimeoutSec $Root
   $parts += (Join-CheckResult 'localai health' $health)
   if ($health.Code -ne 0) { $code = $health.Code }
 
@@ -121,12 +120,12 @@ $first = Run-MonitorChecks
 $final = $first
 $repaired = $false
 
-if ($first.Code -ne 0 -and $Repair -and (Test-Path $Starter)) {
-  Append-Log "[repair] initial health failed; running Start-LocalAI.bat /noopen`n$($first.Text)"
-  $repair = Invoke-AiProcess 'cmd.exe' @('/d', '/c', $Starter, '/noopen') $RepairTimeoutSec $Root
+if ($first.Code -ne 0 -and $Repair) {
+  Append-Log "[repair] initial health failed; running localai start --no-open`n$($first.Text)"
+  $repair = Invoke-AiLocalai @('start', '--no-open') $RepairTimeoutSec $Root
   $repaired = $true
   if ($repair.Code -ne 0) {
-    Append-Log "[repair] Start-LocalAI.bat /noopen failed or timed out (exit $($repair.Code))`n$($repair.Text)"
+    Append-Log "[repair] localai start --no-open failed or timed out (exit $($repair.Code))`n$($repair.Text)"
   }
   $final = Run-MonitorChecks
 }
@@ -161,7 +160,7 @@ if ($final.Code -ne 0) {
   }
 } elseif ($repaired) {
   $shouldNotify = $true
-  $message = 'localai was unhealthy but Start-LocalAI repaired it.'
+  $message = 'localai was unhealthy but a restart repaired it.'
 } elseif ($NotifyOnSuccess -and $state.lastStatus -ne 'OK') {
   $shouldNotify = $true
   $message = 'localai health is OK.'

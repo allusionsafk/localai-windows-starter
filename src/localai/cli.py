@@ -524,7 +524,7 @@ def start(
         typer.Option("--no-open", help="Skip browser launch after live start."),
     ] = False,
 ) -> None:
-    """Start the localai stack once live mode is fully ported."""
+    """Start the localai stack (Ollama, Docker, and the compose services)."""
     code, lines = collect_start_report(dry_run=dry_run, no_open=no_open)
     for line in lines:
         typer.echo(line)

@@ -32,40 +32,9 @@ function Line([string]$Status, [string]$Name, [string]$Detail) {
   Write-Host ("[{0}] {1,-22} {2}" -f $Status, $Name, $Detail) -ForegroundColor $color
 }
 
+. (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 function Invoke-ProcessCaptured([string]$FilePath, [string[]]$ArgumentList = @(), [int]$Seconds = 8) {
-  $p = $null
-  try {
-    $cmd = Get-Command $FilePath -ErrorAction SilentlyContinue
-    $resolved = if ($cmd) { $cmd.Source } else { $FilePath }
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $resolved
-    $psi.WorkingDirectory = $Root
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
-
-    $p = [System.Diagnostics.Process]::new()
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-
-    if (-not $p.WaitForExit($Seconds * 1000)) {
-      try { $p.Kill($true) } catch { try { $p.Kill() } catch {} }
-      return [pscustomobject]@{ Code = 124; Text = "Timed out after ${Seconds}s" }
-    }
-
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    $text = ((@($stdout, $stderr) | Where-Object { $_ }) -join "`n").Trim()
-    return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
-  } catch {
-    return [pscustomobject]@{ Code = 1; Text = $_.Exception.Message }
-  } finally {
-    if ($p) { $p.Dispose() }
-  }
+  return Invoke-AiProcess $FilePath $ArgumentList $Seconds $Root
 }
 
 function Get-PowerState {
@@ -244,8 +213,8 @@ Write-Host ("`nSummary: {0} OK, {1} WARN, {2} FAIL" -f $Ok, $Warn, $Fail)
 if ($power.OnBattery -and $Warn -gt 0) {
   Write-Host ''
   Write-Host 'Battery saver options:'
-  Write-Host '  pwsh -File Stop-LocalAI.ps1'
-  Write-Host '  pwsh -File Stop-AI-For-Gaming.ps1 -DisableWarmTask'
+  Write-Host '  localai stop'
+  Write-Host '  localai game-mode --disable-warm-task'
 }
 
 if ($Fail -gt 0) { exit 1 }

@@ -52,7 +52,7 @@ This stack is **loopback-only and manual-start by design**:
    everything up. When it finishes, your chat is at http://127.0.0.1:3000.
 
 After setup, double-click **`Start Local AI.cmd`** / **`Stop Local AI.cmd`** to
-start and stop it — no typing. Both live next to the installed repo at
+start and stop it — no typing. Both live in the install folder,
 **`%USERPROFILE%\localai`** (e.g. `C:\Users\You\localai\Start Local AI.cmd`).
 
 ### Guided installer (PowerShell)
@@ -80,11 +80,6 @@ powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1
 `bootstrap.ps1` is **pinned and fails closed** — it verifies the download
 against a released tag's commit SHA (git) or zip SHA256 (no-git) before running.
 See `installer/README.md` for the maintainer publishing steps.
-
-> **Status:** the Python building blocks (`localai vet`, `localai webui-seed`,
-> `localai health`, `installer/tiers.json`) are implemented and tested. The
-> guided PowerShell entry points are landing incrementally; until then you can
-> drive the stack directly with the steps below.
 
 ### Manual bring-up
 
@@ -135,9 +130,9 @@ ceiling model fits its own VRAM:
 |---|---|---|---|
 | S | ≥16 GB | ~14B dense @32k (~12.5 GB) | qwen2.5:14b class |
 | A | 12 GB | ~9B dense @32k (~9.5 GB) | qwen3.5:9b-32k |
-| B | 8 GB | ~7B dense @16k (~7.0 GB) | qwen2.5:7b class |
-| C | 4 GB | ~3B dense @8k (~3.7 GB) | qwen2.5:3b class |
-| CPU | none | tiny/MoE only — slow, warned honestly | qwen 4B-A0.6 class |
+| B | 8 GB | ~7B dense @16k (~7.0 GB) | qwen3.5:4b-16k |
+| C | 4 GB | ~3B dense @8k (~3.7 GB) | qwen3.5:2b-8k |
+| CPU | none | small models only — slow, warned honestly | qwen3.5:2b-8k |
 
 **Honest tradeoff:** large context and large models can still spill to CPU when
 VRAM is insufficient, which slows generation. `localai model-scout` shows the

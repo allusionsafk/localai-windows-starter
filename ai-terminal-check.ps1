@@ -44,38 +44,9 @@ function Test-PathListContains([string]$Dir) {
   return $false
 }
 
+. (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 function Invoke-ProcessCaptured([string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 10) {
-  $p = $null
-  try {
-    $resolved = Resolve-CommandSource $FilePath
-    if (-not $resolved) { $resolved = $FilePath }
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $resolved
-    $psi.WorkingDirectory = $Root
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
-
-    $p = [System.Diagnostics.Process]::new()
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-      try { $p.Kill($true) } catch { try { $p.Kill() } catch {} }
-      return [pscustomobject]@{ Code = 124; Text = "Timed out after ${TimeoutSec}s" }
-    }
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    $text = ((@($stdout, $stderr) | Where-Object { $_ }) -join "`n").Trim()
-    return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
-  } catch {
-    return [pscustomobject]@{ Code = 1; Text = $_.Exception.Message }
-  } finally {
-    if ($p) { $p.Dispose() }
-  }
+  return Invoke-AiProcess $FilePath $ArgumentList $TimeoutSec $Root
 }
 
 function Get-OllamaModelNames {

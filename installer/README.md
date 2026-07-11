@@ -4,11 +4,10 @@ A guided, mostly-automatic setup that stands up a **secure, loopback-only** loca
 stack on a clean-ish Windows machine — matched to the box's hardware and to what
 the user actually wants it for.
 
-> **Status:** the Python building blocks below are implemented and tested
-> (`localai vet`, `localai webui-seed`, `installer/tiers.json`). The guided
-> PowerShell entry points (`bootstrap.ps1`, `Install-LocalAI.ps1`) are in
-> progress. Until they land, use the building blocks directly or follow the
-> repo's main `README.md`.
+Entry points: `bootstrap.ps1` (tiny pinned stub that fetches a verified copy of
+the repo, ensures PowerShell 7, and hands off) and `Install-LocalAI.ps1` (the
+phase orchestrator — resumable via `-Resume`, previewable via `-DryRun`). The
+root `README.md` covers how a user runs them.
 
 ## What it does
 
@@ -37,7 +36,9 @@ the user actually wants it for.
 - **Never runs the whole thing elevated** — only the firewall/WinNAT steps
   self-elevate; everything else runs as your normal user.
 
-## Building blocks (shipped today)
+## Building blocks
+
+The orchestrator drives these; each also works standalone:
 
 | Piece | What it is |
 |---|---|
@@ -54,9 +55,9 @@ so each tier's ceiling model fits its own VRAM at 32k/16k/8k context:
 |---|---|---|---|
 | S | ≥16 GB | ~14B dense @32k (12.5 GB) | qwen2.5:14b class |
 | A | 12 GB | ~9B dense @32k (9.5 GB) | qwen3.5:9b-32k |
-| B | 8 GB | ~7B dense @16k (7.0 GB) | qwen2.5:7b class |
-| C | 4 GB | ~3B dense @8k (3.7 GB) | qwen2.5:3b class |
-| CPU | none | tiny/MoE only — slow, warned honestly | qwen 4B-A0.6 class |
+| B | 8 GB | ~7B dense @16k (7.0 GB) | qwen3.5:4b-16k |
+| C | 4 GB | ~3B dense @8k (3.7 GB) | qwen3.5:2b-8k |
+| CPU | none | small models only — slow, warned honestly | qwen3.5:2b-8k |
 
 ## Publishing (maintainer only)
 

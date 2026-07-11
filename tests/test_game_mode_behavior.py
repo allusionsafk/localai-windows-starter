@@ -72,7 +72,7 @@ def test_game_mode_dry_run_report_lists_every_cleanup_action(
     assert lines[-3:] == [
         "  qwen2.5-grounded:latest",
         "",
-        "Game mode cleanup complete. Run Start-LocalAI.bat when you want Open "
+        "Game mode cleanup complete. Run 'localai start' when you want Open "
         "WebUI back.",
     ]
 

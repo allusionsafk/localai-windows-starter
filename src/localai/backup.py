@@ -194,6 +194,7 @@ def collect_restore_report(
 
     if not confirm:
         lines.append("[!] Restore overwrites the live volume; re-run with --confirm.")
+        lines.append("    Tip: run 'localai backup' first so you can undo this.")
         return 2, lines
 
     status = compose.compose_service_status(service)

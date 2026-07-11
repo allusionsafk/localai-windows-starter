@@ -134,8 +134,8 @@ def collect_power_report(
             [
                 "",
                 "Battery saver options:",
-                "  pwsh -File Stop-LocalAI.ps1",
-                "  pwsh -File Stop-AI-For-Gaming.ps1 -DisableWarmTask",
+                "  localai stop",
+                "  localai game-mode --disable-warm-task",
             ]
         )
 

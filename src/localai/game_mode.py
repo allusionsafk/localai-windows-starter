@@ -145,7 +145,7 @@ def collect_game_mode_report(
 
     lines.append("")
     lines.append(
-        "Game mode cleanup complete. Run Start-LocalAI.bat when you want Open "
+        "Game mode cleanup complete. Run 'localai start' when you want Open "
         "WebUI back."
     )
     return 0, lines

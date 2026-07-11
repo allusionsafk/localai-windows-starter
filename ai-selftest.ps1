@@ -2,7 +2,7 @@
 <#
   ai-selftest.ps1 - End-to-end local AI smoke test.
 
-  This is heavier than ai-health.ps1: it runs the public ai-* commands, verifies
+  This is heavier than `localai health`: it runs the public ai-* commands, verifies
   web/vision/code dry-run behavior, then re-warms the fast default model.
   Image generation is optional because it starts ComfyUI and uses more VRAM.
 #>
@@ -46,54 +46,15 @@ function Require-Command($name) {
   return $false
 }
 
-function Resolve-CommandPath([string]$Name) {
-  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-  return $Name
-}
-
+. (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 function Invoke-ProcessCaptured([string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 300, [string]$WorkingDirectory = $Root) {
-  $p = $null
-  try {
-    $resolved = Resolve-CommandPath $FilePath
-    $cmdArgs = @($ArgumentList)
-
-    if ($resolved -match '\.(cmd|bat)$') {
-      $shell = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
-      $cmdArgs = @('/d', '/c', $resolved) + $cmdArgs
-      $resolved = $shell
-    }
-
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $resolved
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-    foreach ($arg in $cmdArgs) { [void]$psi.ArgumentList.Add([string]$arg) }
-
-    $p = [System.Diagnostics.Process]::new()
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-      try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
-      $cmdLine = "$FilePath $($ArgumentList -join ' ')".Trim()
-      return [pscustomobject]@{ Code = 124; Text = "Timed out after ${TimeoutSec}s: $cmdLine" }
-    }
-
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    $text = ((@($stdout, $stderr) | Where-Object { $_ }) -join "`n").Trim()
-    return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
-  } catch {
-    return [pscustomobject]@{ Code = 1; Text = $_.Exception.Message }
-  } finally {
-    if ($p) { $p.Dispose() }
+  # .cmd/.bat need a cmd.exe host; everything else goes straight to the shared runner.
+  $resolved = Resolve-AiCommandPath $FilePath
+  if ($resolved -match '\.(cmd|bat)$') {
+    $shell = if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' }
+    return Invoke-AiProcess $shell (@('/d', '/c', $resolved) + @($ArgumentList)) $TimeoutSec $WorkingDirectory
   }
+  return Invoke-AiProcess $FilePath $ArgumentList $TimeoutSec $WorkingDirectory
 }
 
 function New-TestImage([string]$Path) {
@@ -128,7 +89,7 @@ Write-Host "==== localai self-test ====  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss
 
 Set-Location $Root
 
-$health = Invoke-ProcessCaptured 'python' @('-m', 'localai', 'health') 180
+$health = Invoke-AiLocalai @('health') 180 $Root
 if ($health.Code -eq 0) { Line 'OK' 'stack health' 'localai health passed' }
 else { Line 'FAIL' 'stack health' $health.Text }
 

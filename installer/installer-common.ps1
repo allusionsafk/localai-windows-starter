@@ -144,9 +144,9 @@ function Set-UserEnvVar {
   }
 }
 
-# The Ollama host env the friend's box lacks (this repo's box sets these by hand;
-# see README.md:296-301). OLLAMA_HOST is required for Docker->Ollama;
-# OLLAMA_KV_CACHE_TYPE=q8_0 is load-bearing for the tier VRAM math.
+# The Ollama host env a fresh box lacks. OLLAMA_HOST is required for
+# Docker->Ollama; OLLAMA_KV_CACHE_TYPE=q8_0 is load-bearing for the tier VRAM
+# math (tiers.json assumes it).
 $script:OllamaUserEnv = [ordered]@{
   OLLAMA_HOST           = '0.0.0.0:11434'
   OLLAMA_KV_CACHE_TYPE  = 'q8_0'

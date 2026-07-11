@@ -29,6 +29,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from localai import __version__
 from localai.anywhere import collect_anywhere_report
 from localai.backup import collect_backup_report
 from localai.firewall import collect_firewall_report
@@ -528,7 +529,7 @@ def _app_version() -> str:
     try:
         return package_version("localai")
     except PackageNotFoundError:
-        return "0.1.0"
+        return __version__
 
 
 def _utcnow() -> datetime:
@@ -594,7 +595,7 @@ def collect_runtime() -> dict[str, Any]:
 
 def create_app() -> FastAPI:
     """Create the localai dashboard app."""
-    app = FastAPI(title="localai dashboard", version="0.1.0")
+    app = FastAPI(title="localai dashboard", version=_app_version())
     static_root = files("localai").joinpath("static")
     app.mount("/static", StaticFiles(directory=str(static_root)), name="static")
 

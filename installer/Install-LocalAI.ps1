@@ -9,7 +9,7 @@
 
   Resumable: phase completion is recorded in installer-state.json so a
   Docker-Desktop reboot mid-run can be resumed with -Resume. -DryRun prints every
-  action and changes nothing. See PLAN-installer.md for the full design.
+  action and changes nothing. See installer/README.md for the design.
 
   Usage:
     pwsh -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1
@@ -125,21 +125,27 @@ function Invoke-PhaseIntent {
   } else {
     $chosen = $Intent -split '\s*,\s*'
   }
+  $chosen = @($chosen | ForEach-Object { "$_".Trim().ToLowerInvariant() } | Where-Object { $_ })
   $valid = @($chosen | Where-Object { $IntentLabels.Contains($_) } | Select-Object -Unique)
+  $ignored = @($chosen | Where-Object { -not $IntentLabels.Contains($_) } | Select-Object -Unique)
   if (-not $valid) { $valid = @('chat') }
   $State.intent = $valid
-  Write-Card 'Phase 2 - Intent' @("Selected: $($valid -join ', ')")
+  $lines = @("Selected: $($valid -join ', ')")
+  if ($ignored) {
+    $lines += "Ignored (not an option): $($ignored -join ', ')   - options are chat, coding, web, voice"
+  }
+  Write-Card 'Phase 2 - Intent' $lines
 }
 
 function Invoke-PhasePython {
-  Write-Card 'Phase 4a - Python 3.12' @('winget install Python.Python.3.12')
+  Write-Card 'Phase 3a - Python 3.12' @('winget install Python.Python.3.12')
   [void](Install-WithWinget -Id 'Python.Python.3.12')
 }
 
 function Invoke-PhasePip {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 4b - Install localai (editable)' @('py -3.12 -m pip install -e .[windows]')
+  Write-Card 'Phase 3b - Install localai (editable)' @('py -3.12 -m pip install -e .[windows]')
   if ($PSCmdlet.ShouldProcess('.[windows]', 'pip install -e')) {
     $py = Resolve-Python
     if (-not $py) { throw 'Python still not on PATH after install; open a new shell and -Resume.' }
@@ -153,8 +159,9 @@ function Invoke-PhaseScout {
   [CmdletBinding(SupportsShouldProcess)]
   param()
   $budget = $State.hardware.vram_gb
-  Write-Card 'Phase 3 - Choose models' @(
-    "Running scout at the vetted VRAM budget ($($budget ?? 'CPU')) GB, tier $($State.hardware.tier)")
+  $budgetLabel = if ($null -ne $budget) { "$budget GB VRAM budget" } else { 'no VRAM (CPU-only)' }
+  Write-Card 'Phase 4 - Choose models' @(
+    "Running the scout at the vetted $budgetLabel, tier $($State.hardware.tier)")
   if ($PSCmdlet.ShouldProcess('scout', 'run localai scout')) {
     $scoutArgs = @('scout')
     if ($null -ne $budget) { $scoutArgs += @('--vram-gb', "$budget") }
@@ -173,12 +180,12 @@ function Invoke-PhaseScout {
   $State.models = [pscustomobject]@{
     chat = [pscustomobject]@{ tag = $tag; source = $pick.source; num_ctx = $pick.ctx }
   }
-  Write-Card 'Phase 3 - Picks' @(
+  Write-Card 'Phase 4 - Picks' @(
     "chat -> $tag   (source $($pick.source) @ $($pick.ctx) ctx, tier $($State.hardware.tier))")
 }
 
 function Invoke-PhaseOllamaDocker {
-  Write-Card 'Phase 4a - Ollama, Node, Docker' @('winget install Ollama.Ollama; set Ollama host env')
+  Write-Card 'Phase 5a - Ollama, Node, Docker' @('winget install Ollama.Ollama; set Ollama host env')
   [void](Install-WithWinget -Id 'Ollama.Ollama')
   # Load-bearing: Windows Ollama defaults to 127.0.0.1; Docker reaches it via
   # host.docker.internal, so we must bind 0.0.0.0 and set q8_0 KV (finding 1).
@@ -187,7 +194,7 @@ function Invoke-PhaseOllamaDocker {
 
   $docker = Get-Command 'docker.exe' -ErrorAction SilentlyContinue
   if (-not $docker) {
-    Write-Card 'Phase 4a - Docker Desktop' @(
+    Write-Card 'Phase 5a - Docker Desktop' @(
       'Docker Desktop not found. Installing via winget...',
       'FIRST LAUNCH needs you to accept its license + WSL2 setup, and may reboot.')
     [void](Install-WithWinget -Id 'Docker.DockerDesktop' -TimeoutSec 1200)
@@ -204,7 +211,7 @@ function Invoke-PhaseOllamaDocker {
 function Invoke-PhasePulls {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 4c - Pull models + aliases' @(
+  Write-Card 'Phase 5b - Pull models + aliases' @(
     'ollama pull picks; build Modelfiles; localai model-aliases (needs Ollama running)')
   if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
     $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
@@ -238,7 +245,7 @@ function Invoke-PhasePulls {
 function Invoke-PhaseCompose {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 4d - Compose up' @(
+  Write-Card 'Phase 5c - Compose up' @(
     'point DEFAULT_MODELS at the pick; write .env (SEARXNG_SECRET); localai start')
   if ($PSCmdlet.ShouldProcess('.env + stack', 'write .env and localai start')) {
     # This repo's compose hardcodes the tier-A daily driver; rewrite it to the
@@ -261,7 +268,7 @@ function Invoke-PhaseCompose {
 function Invoke-PhaseSeed {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 4e - Seed Open WebUI DB' @(
+  Write-Card 'Phase 5d - Seed Open WebUI DB' @(
     "localai webui-seed --model $($State.models.chat.tag) --num-ctx $($State.models.chat.num_ctx)")
   if ($PSCmdlet.ShouldProcess('open-webui DB', 'localai webui-seed')) {
     [void](Invoke-Localai -Arguments @(
@@ -274,7 +281,7 @@ function Invoke-PhaseSeed {
 function Invoke-PhaseSecure {
   [CmdletBinding(SupportsShouldProcess)]
   param()
-  Write-Card 'Phase 5 - Secure by default' @(
+  Write-Card 'Phase 6 - Secure by default' @(
     'ai-firewall -Apply (block physical-adapter ports); WinNAT :3000 fix if reserved',
     'Loopback-only binds verified; NO LAN exposure; NO autostart registered')
   if ($PSCmdlet.ShouldProcess('firewall', 'ai-firewall -Apply')) {
@@ -311,7 +318,7 @@ function Invoke-PhaseSecure {
 }
 
 function Invoke-PhaseSelfTest {
-  Write-Card 'Phase 6 - Self-test + hand off' @('localai health (must exit 0)')
+  Write-Card 'Phase 7 - Self-test + hand off' @('localai health (must exit 0)')
   if ($DryRun) {
     Write-Host '   [dry-run] would run: python -m localai health' -ForegroundColor DarkGray
   } else {

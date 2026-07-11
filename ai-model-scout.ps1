@@ -91,45 +91,9 @@ function Fail-Scout([string]$m){
   $script:ScoutFailed = $true
   Note $m
 }
-function Resolve-CommandPath([string]$Name) {
-  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-  return $Name
-}
+. (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 function Invoke-ProcessCaptured([string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 300, [string]$WorkingDirectory = $Root) {
-  $p = $null
-  try {
-    $resolved = Resolve-CommandPath $FilePath
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $resolved
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-    foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
-
-    $p = [System.Diagnostics.Process]::new()
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-      try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
-      $cmdLine = "$FilePath $($ArgumentList -join ' ')".Trim()
-      return [pscustomobject]@{ Code = 124; Text = "Timed out after ${TimeoutSec}s: $cmdLine" }
-    }
-
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    $text = ((@($stdout, $stderr) | Where-Object { $_ }) -join "`n").Trim()
-    return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
-  } catch {
-    return [pscustomobject]@{ Code = 1; Text = $_.Exception.Message }
-  } finally {
-    if ($p) { $p.Dispose() }
-  }
+  return Invoke-AiProcess $FilePath $ArgumentList $TimeoutSec $WorkingDirectory
 }
 function Invoke-ProcessChecked([string]$label, [string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 300) {
   $r = Invoke-ProcessCaptured $FilePath $ArgumentList $TimeoutSec
@@ -507,14 +471,14 @@ if (-not $pick) {
   Say ("[+] Top pick: {0}   fit={1} (~{2}GB)" -f $pick.name,$pick.verdict,$pick.sizeGB) 'Green'
 
   if ($Mode -eq 'Scout') {
-    Say "    (Scout mode: not pulling. Run -Mode Prepare or AI-ModelScout-Now.bat to install it.)" 'DarkGray'
+    Say "    (Scout mode: not pulling. Run again with -Mode Prepare to install it.)" 'DarkGray'
     $logLines.Add("- TOP PICK (not pulled, Scout mode): $($pick.id)")
-    Show-Notify 'Model scout' ("New candidate that fits your GPU: {0}. Run AI-ModelScout-Now.bat to install+ground+benchmark it." -f $pick.name)
+    Show-Notify 'Model scout' ("New candidate that fits your GPU: {0}. Run ai-model-scout.ps1 -Mode Prepare to install+ground+benchmark it." -f $pick.name)
   }
   elseif ($pick.sizeGB -and ($budget.DiskFreeGB -lt ($pick.sizeGB + 12))) {
     Say "[!] Low disk (need ~$($pick.sizeGB+12)GB, have $($budget.DiskFreeGB)GB). Skipping pull; notifying instead." 'Yellow'
     $logLines.Add("- SKIPPED pull (low disk): $($pick.id)")
-    Show-Notify 'Model scout' ("{0} fits your GPU but disk is low. Free space, then run AI-ModelScout-Now.bat." -f $pick.name)
+    Show-Notify 'Model scout' ("{0} fits your GPU but disk is low. Free space, then run ai-model-scout.ps1 -Mode Prepare." -f $pick.name)
   }
   else {
     # --- PREPARE: pull -> ground -> benchmark ---

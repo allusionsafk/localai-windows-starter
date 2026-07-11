@@ -29,7 +29,7 @@ echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%BOOT%" %*
 if errorlevel 1 goto :failed
 echo.
-echo   Finished. Scroll up for your chat and search web addresses.
+echo   Finished. Your chat is at http://127.0.0.1:3000 (see the summary above).
 goto :done
 
 :failed

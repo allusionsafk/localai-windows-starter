@@ -96,45 +96,9 @@ function HumanTime([double]$sec) {
   if ($t.TotalMinutes -lt 1) { return ('{0}s' -f $t.Seconds) }
   return ('{0}m {1}s' -f [int]$t.TotalMinutes, $t.Seconds)
 }
-function Resolve-CommandPath([string]$Name) {
-  $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
-  return $Name
-}
+. (Join-Path $Root 'ai-common.ps1')   # shared Invoke-AiProcess (was inlined below)
 function Invoke-ProcessCaptured([string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 300, [string]$WorkingDirectory = $Root) {
-  $p = $null
-  try {
-    $resolved = Resolve-CommandPath $FilePath
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $resolved
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
-    foreach ($arg in @($ArgumentList)) { [void]$psi.ArgumentList.Add([string]$arg) }
-
-    $p = [System.Diagnostics.Process]::new()
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-
-    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
-      try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
-      $cmdLine = "$FilePath $($ArgumentList -join ' ')".Trim()
-      return [pscustomobject]@{ Code = 124; Text = "Timed out after ${TimeoutSec}s: $cmdLine" }
-    }
-
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
-    $text = ((@($stdout, $stderr) | Where-Object { $_ }) -join "`n").Trim()
-    return [pscustomobject]@{ Code = $p.ExitCode; Text = $text }
-  } catch {
-    return [pscustomobject]@{ Code = 1; Text = $_.Exception.Message }
-  } finally {
-    if ($p) { $p.Dispose() }
-  }
+  return Invoke-AiProcess $FilePath $ArgumentList $TimeoutSec $WorkingDirectory
 }
 function Invoke-ProcessChecked([string]$label, [string]$FilePath, [string[]]$ArgumentList = @(), [int]$TimeoutSec = 300) {
   $r = Invoke-ProcessCaptured $FilePath $ArgumentList $TimeoutSec
@@ -274,7 +238,7 @@ try {
       $newest = $tags | Where-Object { $_ -match '^\d{4}\.\d+\.\d+' } | Select-Object -First 1
       if ($newest -and (Test-Newer $searxngTag $newest)) {
         $Manual.Add([pscustomobject]@{ name='SearXNG'; key='searxng'; cur=$searxngTag; latest=$newest;
-          how='PINNED on purpose (newer tags have broken the boot). Only if you will test it: edit docker-compose.yml searxng image tag, then run update.ps1, then confirm http://localhost:8080 loads.' })
+          how='PINNED on purpose (newer tags have broken the boot). Only if you will test it: edit docker-compose.yml searxng image tag, run ai-update.ps1 -Mode Apply, then confirm http://localhost:8080 loads.' })
         Say "    $newest available (pinned at $searxngTag)" 'Yellow'
       } else { Say "    no newer tag (pinned at $searxngTag)" 'DarkGray' }
     } catch { Note "could not check SearXNG tags (offline?)." }
@@ -287,7 +251,7 @@ try {
       $latestKokoro = (Invoke-RestMethod 'https://api.github.com/repos/remsky/Kokoro-FastAPI/releases/latest' -Headers @{ 'User-Agent' = 'localai-updater' } -TimeoutSec 20).tag_name
       if (Test-Newer $kokoroTag $latestKokoro) {
         $Manual.Add([pscustomobject]@{ name='Kokoro TTS'; key='kokoro'; cur=$kokoroTag; latest=$latestKokoro;
-          how='PINNED. To update: edit docker-compose.yml kokoro image tag to this version, run update.ps1, then test voice playback in a chat.' })
+          how='PINNED. To update: edit docker-compose.yml kokoro image tag to this version, run ai-update.ps1 -Mode Apply, then test voice playback in a chat.' })
         Say "    $latestKokoro available (pinned at $kokoroTag)" 'Yellow'
       } else { Say "    up to date ($kokoroTag)" 'DarkGray' }
     } catch { Note "could not check Kokoro releases (offline?)." }
@@ -305,10 +269,14 @@ try {
       Say "[+] Backing up Open WebUI data..." 'Cyan'
       try {
         $backupOuterTimeout = $BackupTimeoutSec + 30
-        [void](Invoke-ProcessChecked 'backup.ps1' 'pwsh' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $Root 'backup.ps1'), '-TimeoutSec', "$BackupTimeoutSec") $backupOuterTimeout)
+        $backupRun = Invoke-AiLocalai @('backup', '--timeout-sec', "$BackupTimeoutSec") $backupOuterTimeout $Root
+        if ($backupRun.Code -ne 0) {
+          $detail = if ($backupRun.Text) { " - $($backupRun.Text)" } else { '' }
+          throw "localai backup failed (exit $($backupRun.Code))$detail"
+        }
         $bk = Get-ChildItem (Join-Path $Root 'backups') -Filter 'open-webui-*.tar.gz' -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if (-not $bk) { throw 'backup.ps1 completed but no open-webui backup file was found' }
+        if (-not $bk) { throw 'localai backup completed but no open-webui backup file was found' }
         if ($bk.Length -le 0) { throw "backup file is empty: $($bk.Name)" }
         $backupFile = "$($bk.Name) ({0:N1} MB)" -f ($bk.Length / 1MB)
       } catch {
@@ -486,7 +454,7 @@ try {
       if ($owNeedsUpdate) { $chk += 'Open WebUI update ready' } else { $chk += 'Open WebUI up to date' }
       $chk += 'models: refreshed on apply (incremental)'
       if ($Manual.Count -gt 0) { $chk += ('manual: ' + (($Manual | ForEach-Object { "$($_.name) $($_.latest)" }) -join ', ')) }
-      $chk += "Apply now: run AI-Update-Now.bat (est. $estimate)"
+      $chk += "Apply now: run ai-update.ps1 -Mode Apply (est. $estimate)"
       $toastMsg = $chk -join "`n"
     }
     Show-Notify $toastTitle $toastMsg
@@ -508,7 +476,7 @@ try {
     $lines.Add('- Apply requested, but no safe updates were completed.')
   } else {
     $lines.Add('- Check only - nothing was changed.')
-    if ($owNeedsUpdate) { $lines.Add('- Open WebUI: update available (apply with AI-Update-Now.bat).') }
+    if ($owNeedsUpdate) { $lines.Add('- Open WebUI: update available (apply with ai-update.ps1 -Mode Apply).') }
     else { $lines.Add('- Open WebUI: up to date.') }
   }
   if ($Manual.Count -gt 0) {
