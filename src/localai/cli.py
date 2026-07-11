@@ -295,7 +295,8 @@ def model_scout(
         str,
         typer.Option(
             "--mode",
-            help="Scout and Prepare are ported; Promote remains gated (manual).",
+            help="Scout (report only) or Prepare (pull a category's top pick). "
+            "Promote remains gated (manual).",
         ),
     ] = "Scout",
     top_n: Annotated[
@@ -330,6 +331,15 @@ def model_scout(
             "(chat/coding/vision/web-nav/embedding/voice). Default: chat.",
         ),
     ] = None,
+    vram_gb: Annotated[
+        float | None,
+        typer.Option(
+            "--vram-gb",
+            help="Override the VRAM budget (GB) instead of probing nvidia-smi. "
+            "The installer passes the vetted tier budget so non-NVIDIA boxes get "
+            "honest picks.",
+        ),
+    ] = None,
 ) -> None:
     """Discover, score, and optionally prepare recent GGUF model candidates."""
     # Lines stream via echo as they are produced - Prepare pulls for many
@@ -341,58 +351,14 @@ def model_scout(
         probe_timeout_sec=probe_timeout_sec,
         no_pull=no_pull,
         category=category,
-        echo=typer.echo,
-    )
-    raise typer.Exit(code=code)
-
-
-@app.command()
-def scout(
-    mode: Annotated[
-        str,
-        typer.Option("--mode", help="Scout (grouped tops) or Prepare a category."),
-    ] = "Scout",
-    top_n: Annotated[
-        int,
-        typer.Option("--top-n", help="Max runners-up/dropped to show per category."),
-    ] = 8,
-    category: Annotated[
-        str | None,
-        typer.Option(
-            "--category",
-            help="Prepare only: task category to prepare "
-            "(chat/coding/vision/web-nav/embedding/voice). Default: chat.",
-        ),
-    ] = None,
-    probe_timeout_sec: Annotated[
-        int,
-        typer.Option("--probe-timeout-sec", min=5, max=600),
-    ] = 30,
-    no_pull: Annotated[
-        bool,
-        typer.Option("--no-pull", help="Prepare only: skip the model download."),
-    ] = False,
-    vram_gb: Annotated[
-        float | None,
-        typer.Option(
-            "--vram-gb",
-            help="Override the VRAM budget (GB) instead of probing nvidia-smi. "
-            "The installer passes the vetted tier budget so non-NVIDIA boxes get "
-            "honest picks.",
-        ),
-    ] = None,
-) -> None:
-    """Recommend a best model per task category (alias of model-scout)."""
-    code, _ = collect_model_scout_report(
-        mode=mode,
-        top_n=top_n,
-        probe_timeout_sec=probe_timeout_sec,
-        no_pull=no_pull,
-        category=category,
         vram_gb=vram_gb,
         echo=typer.echo,
     )
     raise typer.Exit(code=code)
+
+
+# The same command under the shorter name the installer and docs also use.
+app.command(name="scout")(model_scout)
 
 
 @app.command()

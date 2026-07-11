@@ -165,11 +165,13 @@ def test_scout_lists_dropped_models_for_vram(
 def test_scout_command_alias_is_registered() -> None:
     from localai import cli
 
-    callbacks = {
-        info.callback.__name__ for info in cli.app.registered_commands if info.callback
+    names = {
+        info.name or info.callback.__name__.replace("_", "-")
+        for info in cli.app.registered_commands
+        if info.callback
     }
-    assert "scout" in callbacks  # brief calls it `localai scout`
-    assert "model_scout" in callbacks  # original name kept for parity
+    assert "scout" in names  # brief calls it `localai scout`
+    assert "model-scout" in names  # original name kept for parity
 
 
 # ------------------------------------ VRAM budget honesty (audit finding 4)
@@ -241,7 +243,7 @@ def test_scout_command_exposes_vram_gb_flag() -> None:
     scout = next(
         info.callback
         for info in cli.app.registered_commands
-        if info.callback and info.callback.__name__ == "scout"
+        if info.callback and info.name == "scout"
     )
     assert "vram_gb" in inspect.signature(scout).parameters
 
