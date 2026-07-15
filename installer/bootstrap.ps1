@@ -49,21 +49,54 @@ A maintainer must set -ExpectedCommit and -ExpectedZipSha256 for the release tag
 "@
 }
 
-function Test-Pwsh7 {
-  $pwsh = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
-  return [bool]$pwsh
+function Resolve-Pwsh7 {
+  # Get-Command first; fall back to the default install dir because a
+  # just-finished MSI/winget install does NOT refresh this process's PATH.
+  $cmd = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $default = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+  if (Test-Path -LiteralPath $default) { return $default }
+  return $null
 }
 
 function Install-Pwsh7 {
   $winget = Get-Command 'winget.exe' -ErrorAction SilentlyContinue
-  if (-not $winget) {
-    throw 'winget not found. Install PowerShell 7 from https://aka.ms/powershell-release then re-run.'
+  if ($winget) {
+    Write-Host 'Installing PowerShell 7 via winget...' -ForegroundColor Cyan
+    & $winget.Source install --id 'Microsoft.PowerShell' -e `
+      --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -eq 0) { return }
+    Write-Host "winget could not install PowerShell 7 (exit $LASTEXITCODE); falling back to the signed MSI." -ForegroundColor Yellow
+  } else {
+    Write-Host 'winget not found (normal on Windows Sandbox / stripped installs); downloading the signed PowerShell 7 MSI instead...' -ForegroundColor Cyan
   }
-  Write-Host 'Installing PowerShell 7 via winget...' -ForegroundColor Cyan
-  & $winget.Source install --id 'Microsoft.PowerShell' -e `
-    --accept-package-agreements --accept-source-agreements
-  if ($LASTEXITCODE -ne 0) {
-    throw "winget could not install PowerShell 7 (exit $LASTEXITCODE). Install it from https://aka.ms/powershell-release then re-run this script."
+
+  # Fallback: latest stable MSI from the official release, verified by
+  # Microsoft's Authenticode signature (durable; a pinned hash would go stale
+  # every release). Requires admin for msiexec /qn - failure messages carry
+  # the manual URL.
+  $manual = 'https://aka.ms/powershell-release'
+  try {
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -TimeoutSec 60
+  } catch {
+    throw "Could not reach the PowerShell release API ($($_.Exception.Message)). Install PowerShell 7 from $manual then re-run."
+  }
+  $arch = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
+  $asset = @($release.assets | Where-Object { $_.name -like "PowerShell-*-win-$arch.msi" })[0]
+  if (-not $asset) { throw "No win-$arch MSI on the latest PowerShell release. Install from $manual then re-run." }
+  $msi = Join-Path $env:TEMP $asset.name
+  Write-Host "Downloading $($asset.name)..." -ForegroundColor Cyan
+  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msi -TimeoutSec 600
+  $sig = Get-AuthenticodeSignature -LiteralPath $msi
+  if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+    Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
+    throw "Downloaded MSI failed signature verification (status: $($sig.Status)). Refusing to run it. Install from $manual instead."
+  }
+  Write-Host 'Signature verified (Microsoft Corporation). Installing (may take a minute)...' -ForegroundColor Green
+  $proc = Start-Process 'msiexec.exe' -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+  Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue
+  if ($proc.ExitCode -ne 0) {
+    throw "MSI install failed (exit $($proc.ExitCode)); admin rights are required. Install from $manual then re-run."
   }
 }
 
@@ -165,17 +198,10 @@ if (-not (Test-Path -LiteralPath $orchestrator)) {
   throw "Orchestrator not found at $orchestrator - download may be incomplete."
 }
 
-if (-not (Test-Pwsh7)) { Install-Pwsh7 }
-# A just-installed pwsh is not on this process's stale PATH yet: refresh from
-# the registry, then fall back to the default install location.
-$env:Path = @(
-  [Environment]::GetEnvironmentVariable('Path', 'Machine'),
-  [Environment]::GetEnvironmentVariable('Path', 'User')
-) -join ';'
-$pwsh = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
-$pwshPath = if ($pwsh) { $pwsh.Source } else { Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe' }
-if (-not (Test-Path -LiteralPath $pwshPath)) {
-  throw "PowerShell 7 was installed but could not be located yet. Close this window, open a new one, and run:`n  pwsh -ExecutionPolicy Bypass -File `"$orchestrator`""
+$pwshPath = Resolve-Pwsh7
+if (-not $pwshPath) { Install-Pwsh7; $pwshPath = Resolve-Pwsh7 }
+if (-not $pwshPath) {
+  throw 'PowerShell 7 still not found after install. Open a new terminal and run the orchestrator manually.'
 }
 
 Write-Host "Launching the guided installer under PowerShell 7..." -ForegroundColor Cyan
