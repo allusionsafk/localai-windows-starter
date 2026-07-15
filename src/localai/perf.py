@@ -476,30 +476,46 @@ def test_loaded_models(add_line: AddLine) -> None:
         add_line("OK", "Loaded models", "none loaded; no active GPU spill")
         return
 
+    # Disk sizes let each loaded model split weights vs context cost.
+    try:
+        tags = ollama_api("/api/tags", timeout_sec=10)
+        disk_sizes = {
+            str(m.get("name")): as_float(m.get("size"))
+            for m in tags.get("models", [])
+            if isinstance(m, dict)
+        }
+    except (OSError, TimeoutError, URLError, json.JSONDecodeError):
+        disk_sizes = {}
+
+    gib = 1024**3
     for model in loaded:
         if not isinstance(model, dict):
             continue
         label = str(model.get("name") or model.get("model") or "loaded model")
         size = as_float(model.get("size"))
         size_vram = as_float(model.get("size_vram"))
-        if size > 0 and size_vram > 0:
-            pct = round((size_vram / size) * 100)
-            size_gb = round(size / (1024**3), 1)
-            vram_gb = round(size_vram / (1024**3), 1)
-            if pct >= 98:
-                add_line(
-                    "OK",
-                    f"{label} residency",
-                    f"{pct}% GPU ({vram_gb}/{size_gb} GB)",
-                )
-            else:
-                add_line(
-                    "WARN",
-                    f"{label} residency",
-                    f"{pct}% GPU ({vram_gb}/{size_gb} GB); CPU spill likely",
-                )
-        else:
+        if not (size > 0 and size_vram > 0):
             add_line("WARN", f"{label} residency", "API did not report size_vram/size")
+            continue
+        pct = round((size_vram / size) * 100)
+        segments = [f"{pct}% GPU ({round(size_vram / gib, 1)}/{round(size / gib, 1)} GB)"]
+        weights = disk_sizes.get(label, 0.0)
+        if weights > 0:
+            segments.append(f"weights {round(weights / gib, 1)} GB")
+            # loaded - disk = KV cache + compute graph + runtime overhead
+            # (NOT pure KV; do not relabel it as such).
+            segments.append(f"ctx/KV+overhead {round(max(size - weights, 0.0) / gib, 1)} GB")
+        cpu_bytes = max(size - size_vram, 0.0)
+        if cpu_bytes > 0.05 * gib:
+            segments.append(f"CPU side {round(cpu_bytes / gib, 1)} GB")
+        ctx = model.get("context_length")
+        if isinstance(ctx, (int, float)) and ctx > 0:
+            segments.append(f"num_ctx {int(ctx)}")
+        status = "OK" if pct >= 98 else "WARN"
+        detail = " · ".join(segments)
+        if pct < 98:
+            detail += "; CPU spill likely"
+        add_line(status, f"{label} residency", detail)
 
 
 def test_gpu_headroom(add_line: AddLine) -> None:

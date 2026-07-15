@@ -291,6 +291,16 @@ if ($ollamaApiReady) {
     if ($loaded.Count -eq 0) {
       Line 'OK' 'Loaded models' 'none loaded; no active GPU spill'
     } else {
+      # Disk sizes let each loaded model split weights vs context cost.
+      $diskSizes = @{}
+      try {
+        $tags = Invoke-OllamaApi '/api/tags' $null 10
+        foreach ($m in @($tags.models)) {
+          if ($m.name) { $diskSizes[[string]$m.name] = [double]$m.size }
+        }
+      } catch {
+        $diskSizes = @{}
+      }
       foreach ($model in $loaded) {
         $label = if ($model.name) { [string]$model.name } elseif ($model.model) { [string]$model.model } else { 'loaded model' }
         $size = [double]$model.size
@@ -299,10 +309,27 @@ if ($ollamaApiReady) {
           $pct = [math]::Round(($sizeVram / $size) * 100, 0)
           $sizeGb = [math]::Round($size / 1GB, 1)
           $vramGb = [math]::Round($sizeVram / 1GB, 1)
+          $segments = @("$pct% GPU ($vramGb/$sizeGb GB)")
+          $weights = if ($diskSizes.ContainsKey($label)) { [double]$diskSizes[$label] } else { 0.0 }
+          if ($weights -gt 0) {
+            $segments += "weights $([math]::Round($weights / 1GB, 1)) GB"
+            # loaded - disk = KV cache + compute graph + runtime overhead
+            # (NOT pure KV; do not relabel it as such).
+            $ctxKv = [math]::Max($size - $weights, 0.0)
+            $segments += "ctx/KV+overhead $([math]::Round($ctxKv / 1GB, 1)) GB"
+          }
+          $cpuBytes = [math]::Max($size - $sizeVram, 0.0)
+          if ($cpuBytes -gt (0.05 * 1GB)) {
+            $segments += "CPU side $([math]::Round($cpuBytes / 1GB, 1)) GB"
+          }
+          if ($model.context_length -and [double]$model.context_length -gt 0) {
+            $segments += "num_ctx $([int][double]$model.context_length)"
+          }
+          $detail = ($segments -join ' · ')
           if ($pct -ge 98) {
-            Line 'OK' "$label residency" "$pct% GPU ($vramGb/$sizeGb GB)"
+            Line 'OK' "$label residency" $detail
           } else {
-            Line 'WARN' "$label residency" "$pct% GPU ($vramGb/$sizeGb GB); CPU spill likely"
+            Line 'WARN' "$label residency" "$detail; CPU spill likely"
           }
         } else {
           Line 'WARN' "$label residency" 'API did not report size_vram/size'
