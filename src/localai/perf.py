@@ -488,6 +488,7 @@ def test_loaded_models(add_line: AddLine) -> None:
         disk_sizes = {}
 
     gib = 1024**3
+    total_vram_attr = 0.0
     for model in loaded:
         if not isinstance(model, dict):
             continue
@@ -497,14 +498,16 @@ def test_loaded_models(add_line: AddLine) -> None:
         if not (size > 0 and size_vram > 0):
             add_line("WARN", f"{label} residency", "API did not report size_vram/size")
             continue
+        total_vram_attr += size_vram
         pct = round((size_vram / size) * 100)
         segments = [f"{pct}% GPU ({round(size_vram / gib, 1)}/{round(size / gib, 1)} GB)"]
         weights = disk_sizes.get(label, 0.0)
         if weights > 0:
+            # loaded - disk = graph/runtime overhead only. Measured 2026-07-15:
+            # /api/ps size EXCLUDES the KV cache (9b@64k reported +0.3 GB while
+            # nvidia-smi showed ~3 GB more) - KV is reported separately below.
             segments.append(f"weights {round(weights / gib, 1)} GB")
-            # loaded - disk = KV cache + compute graph + runtime overhead
-            # (NOT pure KV; do not relabel it as such).
-            segments.append(f"ctx/KV+overhead {round(max(size - weights, 0.0) / gib, 1)} GB")
+            segments.append(f"overhead {round(max(size - weights, 0.0) / gib, 1)} GB")
         cpu_bytes = max(size - size_vram, 0.0)
         if cpu_bytes > 0.05 * gib:
             segments.append(f"CPU side {round(cpu_bytes / gib, 1)} GB")
@@ -512,10 +515,37 @@ def test_loaded_models(add_line: AddLine) -> None:
         if isinstance(ctx, (int, float)) and ctx > 0:
             segments.append(f"num_ctx {int(ctx)}")
         status = "OK" if pct >= 98 else "WARN"
-        detail = " · ".join(segments)
+        detail = ", ".join(segments)
         if pct < 98:
             detail += "; CPU spill likely"
         add_line(status, f"{label} residency", detail)
+
+    # KV cache is invisible in /api/ps accounting (see comment above), so show
+    # it as the gap between what the GPU reports used and what Ollama claims:
+    # gap = KV cache + any non-Ollama GPU apps (browser, desktop compositor).
+    if total_vram_attr > 0:
+        result = run_command(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            cwd=REPO_ROOT,
+            timeout_sec=15,
+        )
+        if result.code == 0 and result.text.strip():
+            try:
+                used_bytes = float(result.text.splitlines()[0].strip()) * 1024**2
+            except ValueError:
+                used_bytes = 0.0
+            gap = used_bytes - total_vram_attr
+            if used_bytes > 0 and gap > 0.2 * gib:
+                add_line(
+                    "OK",
+                    "Context/KV cache",
+                    f"~{round(gap / gib, 1)} GB GPU beyond Ollama-attributed "
+                    "(KV cache + other GPU apps)",
+                )
 
 
 def test_gpu_headroom(add_line: AddLine) -> None:

@@ -301,22 +301,25 @@ if ($ollamaApiReady) {
       } catch {
         $diskSizes = @{}
       }
+      $totalVramAttr = 0.0
       foreach ($model in $loaded) {
         $label = if ($model.name) { [string]$model.name } elseif ($model.model) { [string]$model.model } else { 'loaded model' }
         $size = [double]$model.size
         $sizeVram = [double]$model.size_vram
         if ($size -gt 0 -and $sizeVram -gt 0) {
+          $totalVramAttr += $sizeVram
           $pct = [math]::Round(($sizeVram / $size) * 100, 0)
           $sizeGb = [math]::Round($size / 1GB, 1)
           $vramGb = [math]::Round($sizeVram / 1GB, 1)
           $segments = @("$pct% GPU ($vramGb/$sizeGb GB)")
           $weights = if ($diskSizes.ContainsKey($label)) { [double]$diskSizes[$label] } else { 0.0 }
           if ($weights -gt 0) {
+            # loaded - disk = graph/runtime overhead only. Measured 2026-07-15:
+            # /api/ps size EXCLUDES the KV cache (9b@64k reported +0.3 GB while
+            # nvidia-smi showed ~3 GB more) - KV is reported separately below.
             $segments += "weights $([math]::Round($weights / 1GB, 1)) GB"
-            # loaded - disk = KV cache + compute graph + runtime overhead
-            # (NOT pure KV; do not relabel it as such).
-            $ctxKv = [math]::Max($size - $weights, 0.0)
-            $segments += "ctx/KV+overhead $([math]::Round($ctxKv / 1GB, 1)) GB"
+            $overhead = [math]::Max($size - $weights, 0.0)
+            $segments += "overhead $([math]::Round($overhead / 1GB, 1)) GB"
           }
           $cpuBytes = [math]::Max($size - $sizeVram, 0.0)
           if ($cpuBytes -gt (0.05 * 1GB)) {
@@ -325,7 +328,7 @@ if ($ollamaApiReady) {
           if ($model.context_length -and [double]$model.context_length -gt 0) {
             $segments += "num_ctx $([int][double]$model.context_length)"
           }
-          $detail = ($segments -join ' · ')
+          $detail = ($segments -join ', ')
           if ($pct -ge 98) {
             Line 'OK' "$label residency" $detail
           } else {
@@ -334,6 +337,21 @@ if ($ollamaApiReady) {
         } else {
           Line 'WARN' "$label residency" 'API did not report size_vram/size'
         }
+      }
+      # KV cache is invisible in /api/ps accounting (see comment above): show it
+      # as the gap between GPU-reported use and Ollama-attributed VRAM
+      # (gap = KV cache + any non-Ollama GPU apps).
+      if ($totalVramAttr -gt 0) {
+        try {
+          $smiKv = Invoke-ProcessCaptured 'nvidia-smi' @('--query-gpu=memory.used', '--format=csv,noheader,nounits') 15
+          if ($smiKv.Code -eq 0 -and $smiKv.Text) {
+            $usedBytes = [double]((("$($smiKv.Text)" -split "`n")[0]).Trim()) * 1MB
+            $gap = $usedBytes - $totalVramAttr
+            if ($usedBytes -gt 0 -and $gap -gt (0.2 * 1GB)) {
+              Line 'OK' 'Context/KV cache' "~$([math]::Round($gap / 1GB, 1)) GB GPU beyond Ollama-attributed (KV cache + other GPU apps)"
+            }
+          }
+        } catch { }
       }
     }
   } catch {
