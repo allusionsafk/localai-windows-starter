@@ -63,7 +63,11 @@ function Resolve-Python {
   # winget's default per-user install dir (PATH can be stale even after
   # Update-SessionPath). Every candidate is probed before use; only a probed
   # success is cached.
-  if ($script:ResolvedPython) { return $script:ResolvedPython }
+  # Unary commas below: a single-element candidate like @('...\python.exe')
+  # otherwise unrolls to a bare string on return, and $py[0] then indexes the
+  # STRING - the installer literally tried to start a process named 'C'
+  # (clean-VM bug, v0.1.5).
+  if ($script:ResolvedPython) { return , $script:ResolvedPython }
   Update-SessionPath
   $candidates = @()
   $py = Get-Command 'py.exe' -ErrorAction SilentlyContinue
@@ -77,8 +81,8 @@ function Resolve-Python {
   if (Test-Path -LiteralPath $direct) { $candidates += , @($direct) }
   foreach ($candidate in $candidates) {
     if (Test-PythonCandidate -Candidate $candidate) {
-      $script:ResolvedPython = $candidate
-      return $candidate
+      $script:ResolvedPython = @($candidate)
+      return , $script:ResolvedPython
     }
   }
   return $null
@@ -86,9 +90,13 @@ function Resolve-Python {
 
 function Get-PyRest {
   # The launcher args after the executable (e.g. '-3.12'), or @() for python.exe.
+  # The unary comma prevents PowerShell from unrolling a single-element array
+  # into a bare string on return - without it, '-3.12' + @('-m','pip') string-
+  # concatenates into the single mangled argument '-3.12-m pip' (clean-VM bug,
+  # v0.1.5).
   param([Parameter(Mandatory)][string[]]$Py)
-  if ($Py.Count -gt 1) { return @($Py[1..($Py.Count - 1)]) }
-  return @()
+  if ($Py.Count -gt 1) { return , @($Py[1..($Py.Count - 1)]) }
+  return , @()
 }
 
 function Invoke-Localai {
