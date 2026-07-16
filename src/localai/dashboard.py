@@ -240,22 +240,27 @@ def _game_mode_console() -> tuple[int, list[str]]:
     ]
 
 
-def _nanobrowser_proxy_check() -> tuple[int, list[str]]:
-    """Launch the Ollama think-proxy Nanobrowser needs for thinking-capable models.
+def _webbrain_setup_check() -> tuple[int, list[str]]:
+    """Report WebBrain (browser agent) readiness against Ollama.
 
-    Runs in its own console (like Start Local AI) so the user can see its log and
-    stop it by closing the window - it does not survive reboot/logout by design.
+    WebBrain talks to Ollama directly over the OpenAI-style /v1 API; the only
+    server-side setup is its extension origin in OLLAMA_ORIGINS (the installer's
+    web intent adds it). No proxy, no Node. See docs/webbrain.md.
     """
-    script = repo_path("ollama-think-proxy.mjs")
-    if not script.exists():
-        return 1, [f"[FAIL] Missing {script}"]
-    code, lines = _launch_console(["node", str(script)], cwd=REPO_ROOT)
-    if code != 0:
-        return code, lines
-    return 0, [
-        *lines,
-        "Proxy: http://localhost:11435 -> Ollama (forces think:false).",
-        "Point Nanobrowser's Ollama base URL at http://localhost:11435 (no /v1).",
+    from localai.perf import WEBBRAIN_ORIGIN, get_persisted_env
+
+    steps = [
+        "WebBrain: install from the Chrome Web Store, set its server URL to",
+        "http://localhost:11434 (it adds /v1 itself), and keep the Chrome",
+        "window visible during tasks. Details: docs/webbrain.md",
+    ]
+    origins = get_persisted_env("OLLAMA_ORIGINS")
+    if origins.value and WEBBRAIN_ORIGIN in str(origins.value):
+        return 0, ["[OK] WebBrain origin allowlisted in OLLAMA_ORIGINS.", *steps]
+    return 1, [
+        "[FAIL] OLLAMA_ORIGINS does not allow the WebBrain extension origin.",
+        f"Fix: add {WEBBRAIN_ORIGIN} to user-scope OLLAMA_ORIGINS, restart Ollama.",
+        *steps,
     ]
 
 
@@ -369,13 +374,13 @@ CHECKS: dict[str, DashboardCheck] = {
         "localai start --dry-run",
         lambda: collect_start_report(dry_run=True),
     ),
-    "nanobrowser-proxy": DashboardCheck(
-        "nanobrowser-proxy",
-        "Nanobrowser Proxy",
+    "webbrain": DashboardCheck(
+        "webbrain",
+        "WebBrain",
         "Everyday",
-        True,
-        "node ollama-think-proxy.mjs",
-        _nanobrowser_proxy_check,
+        False,
+        "check WebBrain origin",
+        _webbrain_setup_check,
     ),
     "health": DashboardCheck(
         "health",

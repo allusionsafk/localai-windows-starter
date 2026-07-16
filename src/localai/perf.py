@@ -16,7 +16,9 @@ from localai.ops import run_command
 from localai.paths import REPO_ROOT, repo_path
 from localai.power import format_number
 
-NANOBROWSER_ORIGIN = "chrome-extension://imbddededgmcgfhfpcjmijokokekbkal"
+# WebBrain (the supported browser agent) connects directly to Ollama once this
+# extension origin is allowlisted in OLLAMA_ORIGINS.
+WEBBRAIN_ORIGIN = "chrome-extension://ljhijonmfahplgbbacgcfnaihbjljhhb"
 AddLine = Callable[[str, str, str], None]
 
 
@@ -113,7 +115,7 @@ def collect_perf_report(
     test_open_webui_memories(add_line, compose_text)
     test_open_webui_think_light_rows(add_line)
     test_context_length(add_line, max_daily_context)
-    test_nanobrowser_origin(add_line)
+    test_webbrain_origin(add_line)
     test_ollama_api(add_line, max_think_light_context)
     test_gpu_headroom(add_line)
 
@@ -367,18 +369,18 @@ def test_max_loaded_models(add_line: AddLine) -> None:
         )
 
 
-def test_nanobrowser_origin(add_line: AddLine) -> None:
+def test_webbrain_origin(add_line: AddLine) -> None:
     origins = get_persisted_env("OLLAMA_ORIGINS")
-    if origins.value and NANOBROWSER_ORIGIN in str(origins.value):
-        add_line("OK", "Nanobrowser origin", "extension origin is allowed")
+    if origins.value and WEBBRAIN_ORIGIN in str(origins.value):
+        add_line("OK", "WebBrain origin", "extension origin is allowed")
     elif origins.value:
         add_line(
             "WARN",
-            "Nanobrowser origin",
+            "WebBrain origin",
             "extension origin missing from OLLAMA_ORIGINS",
         )
     else:
-        add_line("WARN", "Nanobrowser origin", "OLLAMA_ORIGINS missing")
+        add_line("WARN", "WebBrain origin", "OLLAMA_ORIGINS missing")
 
 
 def test_ollama_api(add_line: AddLine, max_think_light_context: int) -> None:

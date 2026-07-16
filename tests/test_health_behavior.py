@@ -118,7 +118,7 @@ def test_health_collect_summary_uses_fail_exit(
     monkeypatch.setattr(health, "check_terminal_launchers", ok_check)
     monkeypatch.setattr(health, "check_terminal_commands", ok_check)
     monkeypatch.setattr(health, "check_node_smoke", ok_check)
-    monkeypatch.setattr(health, "check_nanobrowser", ok_check)
+    monkeypatch.setattr(health, "check_browser_agent", ok_check)
     monkeypatch.setattr(health, "check_cherry_agent", ok_check)
     monkeypatch.setattr(health, "check_ollama", ok_check)
     monkeypatch.setattr(health, "check_open_webui_reaches_ollama", ok_check)
@@ -227,7 +227,7 @@ def test_optional_artifact_checks_skip_silently_when_absent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
     """P1.4: the private test harnesses and launchers (Cherry MCP, MCP bundle,
-    nanobrowser, Cherry agent, terminal launchers/commands, image studio) are not
+    browser agent, Cherry agent, terminal launchers/commands, image studio) are not
     shipped in the public repo. On a friend box each such check must emit NOTHING
     -- a clean self-test, not a wall of WARNs about files they were never given."""
     import pathlib
@@ -244,7 +244,7 @@ def test_optional_artifact_checks_skip_silently_when_absent(
 
     health.check_node_smoke(rec, "Cherry MCP", "test-filesystem-mcp.mjs", "x", "y")
     health.check_node_smoke(rec, "MCP bundle", "test-mcp-bundle.mjs", "x", "y")
-    health.check_nanobrowser(rec, "qwen3.5:9b-32k")
+    health.check_browser_agent(rec, "qwen3.5:9b-32k")
     health.check_cherry_agent(rec)
     health.check_terminal_launchers(rec)
     health.check_terminal_commands(rec)
@@ -253,7 +253,7 @@ def test_optional_artifact_checks_skip_silently_when_absent(
     assert lines == []  # every optional check stayed silent
 
 
-def test_nanobrowser_present_but_failing_still_warns(
+def test_browser_agent_present_but_failing_still_warns(
     monkeypatch: pytest.MonkeyPatch, tmp_path: object
 ) -> None:
     """Don't weaken the maintainer box: when the harness IS present, a real failure
@@ -268,7 +268,7 @@ def test_nanobrowser_present_but_failing_still_warns(
     )
 
     lines: list[tuple[str, str, str]] = []
-    health.check_nanobrowser(lambda s, n, d: lines.append((s, n, d)), "m")
+    health.check_browser_agent(lambda s, n, d: lines.append((s, n, d)), "m")
 
     assert lines and lines[0][0] == "WARN"
 

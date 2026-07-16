@@ -150,7 +150,7 @@ function Get-Repo {
   }
 
   # No git: download the GitHub tag zip and extract, guarding every path against
-  # escaping the destination parent (pattern from Install-Nanobrowser.ps1).
+  # escaping the destination parent (hardened path-containment pattern).
   $zip = Join-Path $parentResolved "$Repo-$Ref.zip"
   $extract = Join-Path $parentResolved "$Repo-extract"
   $parentPrefix = $parentResolved.TrimEnd('\') + '\'

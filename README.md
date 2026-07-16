@@ -142,7 +142,7 @@ picks *and* the tradeoffs for your box.
 
 The included `*.Modelfile` templates build purpose-tuned Ollama models
 (grounded/anti-hallucination daily drivers, web-navigation models for
-Nanobrowser, long-context variants). Build one with:
+WebBrain, long-context variants). Build one with:
 
 ```powershell
 ollama create qwen-grounded -f qwen-grounded.Modelfile
@@ -156,7 +156,7 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 
 ## Docs
 
-- `docs/nanobrowser.md` — reliable multi-step browser automation with a local
+- `docs/webbrain.md` — reliable multi-step browser automation with a local
   model.
 - `installer/README.md` — the guided installer design, capability tiers, and
   maintainer publishing steps.

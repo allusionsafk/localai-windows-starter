@@ -110,7 +110,7 @@ def collect_health_report(
         "filesystem, memory, thinking, browser, localai tools",
         timeout_sec=45,
     )
-    check_nanobrowser(add_line, default_model)
+    check_browser_agent(add_line, default_model)
     check_cherry_agent(add_line)
     check_ollama(add_line, default_model)
     check_open_webui_reaches_ollama(add_line)
@@ -531,7 +531,7 @@ def check_node_smoke(
         add_line("WARN", name, text)
 
 
-def check_nanobrowser(add_line: AddLine, default_model: str) -> None:
+def check_browser_agent(add_line: AddLine, default_model: str) -> None:
     script = repo_path("test-browser-ai-provider.ps1")
     # P1.4: unshipped optional harness -> silent on a friend box (no WARN wall).
     if not script.exists():
@@ -562,10 +562,10 @@ def check_nanobrowser(add_line: AddLine, default_model: str) -> None:
         and "Native Ollama structured output: OK" in text
     ):
         add_line(
-            "OK", "Nanobrowser Ollama", "origin + native /api/chat structured output OK"
+            "OK", "Browser agent Ollama", "origin + native /api/chat structured output OK"
         )
     else:
-        add_line("WARN", "Nanobrowser Ollama", normalize_whitespace(text))
+        add_line("WARN", "Browser agent Ollama", normalize_whitespace(text))
 
 
 def check_cherry_agent(add_line: AddLine) -> None:

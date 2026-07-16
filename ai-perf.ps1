@@ -246,12 +246,14 @@ if ($ctx.Value -and [int]::TryParse([string]$ctx.Value, [ref]$ctxValue)) {
 }
 
 $origins = Get-PersistedEnv 'OLLAMA_ORIGINS'
-if ([string]$origins.Value -match 'chrome-extension://imbddededgmcgfhfpcjmijokokekbkal') {
-  Line 'OK' 'Nanobrowser origin' 'extension origin is allowed'
+# WebBrain (the supported browser agent) connects direct to Ollama once its
+# extension origin is allowlisted here.
+if ([string]$origins.Value -match 'chrome-extension://ljhijonmfahplgbbacgcfnaihbjljhhb') {
+  Line 'OK' 'WebBrain origin' 'extension origin is allowed'
 } elseif ($origins.Value) {
-  Line 'WARN' 'Nanobrowser origin' 'extension origin missing from OLLAMA_ORIGINS'
+  Line 'WARN' 'WebBrain origin' 'extension origin missing from OLLAMA_ORIGINS'
 } else {
-  Line 'WARN' 'Nanobrowser origin' 'OLLAMA_ORIGINS missing'
+  Line 'WARN' 'WebBrain origin' 'OLLAMA_ORIGINS missing'
 }
 
 $ollamaApiReady = $false

@@ -102,7 +102,7 @@ tasks; loopback-only stance throughout. Modes:
 
 ### 3. Health: `check_open_design()` (`src/localai/health.py`)
 
-P1.4 precedent (Nanobrowser/Cherry/ComfyUI): **silent skip** when Open Design
+P1.4 precedent (WebBrain/Cherry/ComfyUI): **silent skip** when Open Design
 is not installed. When installed: daemon health on loopback, loopback-only
 binding, brand present. Failure detail points at `ai-design.ps1 -Repair`.
 

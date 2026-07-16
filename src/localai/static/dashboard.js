@@ -33,7 +33,7 @@ const ICONS = {
 };
 
 const CHECK_ICON = {
-  start: "playline", "start-dry-run": "flask", "nanobrowser-proxy": "shuffle",
+  start: "playline", "start-dry-run": "flask", webbrain: "shuffle",
   cherry: "chat", agent: "code", health: "activity", perf: "zap",
   power: "battery", terminal: "terminal", anywhere: "globe", firewall: "shield",
   "update-check": "refresh", "update-now": "refresh", "model-scout": "search",
@@ -42,7 +42,7 @@ const CHECK_ICON = {
   stop: "power", doctor: "clipboard",
 };
 const CHECK_VERB = {
-  start: "Start", "nanobrowser-proxy": "Start", cherry: "Open", agent: "Open",
+  start: "Start", webbrain: "Check", cherry: "Open", agent: "Open",
   stop: "Stop",
 };
 const DANGER = new Set(["stop", "game-mode"]);
@@ -489,7 +489,7 @@ function renderTiles() {
       onClick: () => window.open(link.url, "_blank"),
     });
   }
-  for (const id of ["nanobrowser-proxy", "cherry", "agent"]) {
+  for (const id of ["webbrain", "cherry", "agent"]) {
     const check = state.checks.get(id);
     if (!check) continue;
     defs.push({

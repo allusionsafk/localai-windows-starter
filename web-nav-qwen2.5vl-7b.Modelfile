@@ -1,15 +1,15 @@
-# web-nav-qwen2.5vl-7b — max-context light model for Nanobrowser on big/complex pages.
+# web-nav-qwen2.5vl-7b — max-context light model for browser agents on big/complex pages.
 #
 # Use when web-nav-qwen2.5-coder-14b (16k ctx) "loses" elements on large DOMs — e.g. it
 # read only the top of a Wikipedia infobox and mis-extracted a lower field. qwen2.5vl:7b is
 # only 6 GB, so it fits a full 32k context on the 12 GB GPU (double the coder model's room),
-# which keeps the whole element tree in view. It is also a vision model, so Nanobrowser's
-# screenshot/vision mode CAN be enabled with it (optional).
+# which keeps the whole element tree in view. It is also a vision model, so a browser
+# agent's screenshot/vision mode CAN be enabled with it (optional).
 #
 # temperature 0.2: near-deterministic actions.
 #
-# As with the coder model: point Nanobrowser's Planner, Navigator, AND Validator all at this
-# one model so Ollama keeps it resident (no ~13 s reload per re-plan).
+# As with the coder model: point every agent role at this one model so Ollama keeps it
+# resident (no ~13 s reload per re-plan).
 FROM qwen2.5vl:7b
 PARAMETER num_ctx 32768
 PARAMETER temperature 0.2

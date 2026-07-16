@@ -33,7 +33,7 @@ def test_dashboard_manifest_exposes_legacy_control_center_surface() -> None:
     assert {check["id"] for check in payload["checks"]} >= {
         "start",
         "start-dry-run",
-        "nanobrowser-proxy",
+        "webbrain",
         "health",
         "perf",
         "power",

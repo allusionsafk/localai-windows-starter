@@ -97,12 +97,12 @@ CATEGORIES: tuple[Category, ...] = (
             ("fit", 0.7),
             ("kind_match", 0.4),
             ("family", 0.3),
-            ("reasoning", -0.5),  # thinking slows navigation; this repo proxies it off
+            ("reasoning", -0.5),  # thinking slows navigation
         ),
         curated=("web-nav-qwen3.5-9b", "qwen2.5-coder:14b"),
         note=(
-            "Point Nanobrowser at the think-proxy (localhost:11435); "
-            "thinking is suppressed."
+            "WebBrain connects directly to Ollama (server URL "
+            "http://localhost:11434; it adds /v1 itself)."
         ),
     ),
     Category(
