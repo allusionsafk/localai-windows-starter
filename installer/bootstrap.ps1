@@ -23,10 +23,10 @@
 param(
   [string]$Owner = 'allusionsafk',
   [string]$Repo = 'localai-windows-starter',
-  [string]$Ref = 'v0.1.2',
+  [string]$Ref = 'v0.1.3',
   # Filled once the tag is cut; verified after fetch. Empty = not yet pinned.
-  [string]$ExpectedCommit = '77eed498db082d57b489c96c368d3dcde355e6d7',
-  [string]$ExpectedZipSha256 = 'C23B92C36CB4F7891E272CE16CF518BAC125D9E65198F6FD239256163A1ECF38',
+  [string]$ExpectedCommit = 'b5b4d235eb3e24264fcd64cdee2c9e554d68f89f',
+  [string]$ExpectedZipSha256 = '33FDF945BCA27167BF022B8FC898699D38A27CD94858AD89BF3CA58F0C3E35B4',
   [switch]$AllowUnverified,
   [string]$Destination = (Join-Path $env:USERPROFILE 'localai'),
   [string[]]$InstallerArgs = @()
