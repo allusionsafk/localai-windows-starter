@@ -185,12 +185,16 @@ function Invoke-PhaseScout {
 }
 
 function Invoke-PhaseOllamaDocker {
-  Write-Card 'Phase 5a - Ollama, Node, Docker' @('winget install Ollama.Ollama; set Ollama host env')
+  Write-Card 'Phase 5a - Ollama, Docker' @('winget install Ollama.Ollama; set Ollama host env')
   [void](Install-WithWinget -Id 'Ollama.Ollama')
   # Load-bearing: Windows Ollama defaults to 127.0.0.1; Docker reaches it via
   # host.docker.internal, so we must bind 0.0.0.0 and set q8_0 KV (finding 1).
   Set-OllamaHostEnv
-  if (@($State.intent) -contains 'web') { [void](Install-WithWinget -Id 'OpenJS.NodeJS.LTS') }
+  if (@($State.intent) -contains 'web') {
+    # WebBrain talks to Ollama directly (OpenAI-style /v1) - no Node, no proxy.
+    # Ollama rejects extension origins unless allowlisted (docs/webbrain.md).
+    Add-OllamaUserOrigin -Origin $script:WebBrainOrigin
+  }
 
   $docker = Get-Command 'docker.exe' -ErrorAction SilentlyContinue
   if (-not $docker) {
@@ -329,12 +333,18 @@ function Invoke-PhaseSelfTest {
       return
     }
   }
-  Write-Card 'localai is ready' @(
+  $ready = @(
     'Chat:   http://127.0.0.1:3000        (first signup becomes admin)',
     'Search: http://127.0.0.1:8080',
     'Start / stop:  localai start  /  localai stop   (in any terminal)',
     'Change model:  Open WebUI dropdown, or  localai warm --model <id>',
     'Security: loopback-only, firewall-blocked on physical adapters, no autostart.')
+  if (@($State.intent) -contains 'web') {
+    $ready += 'Browser agent: install WebBrain from the Chrome Web Store, set its server URL'
+    $ready += '  to http://localhost:11434, and keep the Chrome window visible during tasks.'
+    $ready += '  Details + troubleshooting: docs/webbrain.md'
+  }
+  Write-Card 'localai is ready' $ready
 }
 
 # ------------------------------------------------------- phase runner

@@ -162,6 +162,24 @@ function Set-OllamaHostEnv {
   }
 }
 
+# WebBrain (the supported browser-agent extension) calls Ollama's OpenAI-style
+# /v1 endpoints straight from its Chrome extension origin, and Ollama 403s
+# extension origins it does not know. Allowlist exactly WebBrain's id (stable
+# across installs) - deliberately narrower than chrome-extension://*, which
+# would let ANY installed extension talk to Ollama. See docs/webbrain.md.
+$script:WebBrainOrigin = 'chrome-extension://ljhijonmfahplgbbacgcfnaihbjljhhb'
+
+function Add-OllamaUserOrigin {
+  # Append one origin to the user-scope OLLAMA_ORIGINS. Never clobbers: a
+  # user's existing custom entries are kept and the origin is only added once.
+  [CmdletBinding(SupportsShouldProcess)]
+  param([Parameter(Mandatory)][string]$Origin)
+  $existing = [Environment]::GetEnvironmentVariable('OLLAMA_ORIGINS', 'User')
+  if ($existing -and (@($existing -split '\s*,\s*') -contains $Origin)) { return }
+  $value = if ($existing) { "$existing,$Origin" } else { $Origin }
+  Set-UserEnvVar -Name 'OLLAMA_ORIGINS' -Value $value
+}
+
 # ----------------------------------------------- Phase 1 hardware vet (pure PS)
 
 function Get-VetVramGb {
