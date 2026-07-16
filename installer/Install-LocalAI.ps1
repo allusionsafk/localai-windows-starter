@@ -220,6 +220,9 @@ function Invoke-PhasePulls {
   if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
     $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
     if (-not $ollama) { throw 'ollama not on PATH; open a new shell and -Resume.' }
+    if (-not (Start-OllamaServer)) {
+      throw 'Ollama server did not become reachable at http://localhost:11434; start Ollama manually, then re-run with -Resume.'
+    }
     # Invoke-AiProcess never throws, so a failed pull/create must be surfaced
     # here or the phase is marked done with no model on the box.
     $pull = Invoke-AiProcess -FilePath $ollama.Source -ArgumentList @('pull', $State.models.chat.source) -TimeoutSec 3600
@@ -365,6 +368,26 @@ $Phases = @(
   @{ Name = 'secure';   Run = { Invoke-PhaseSecure } }
   @{ Name = 'self-test'; Run = { Invoke-PhaseSelfTest } }
 )
+
+# Preflight (review finding localai-43n): Python/Ollama/Docker all install via
+# winget, and a missing winget used to surface as three ignored yellow warnings
+# followed by a dead-end throw in Phase 3b. Fail fast, once, with the real fix -
+# unless every tool winget would install is already present.
+if (-not $DryRun -and -not (Get-Command 'winget.exe' -ErrorAction SilentlyContinue)) {
+  Update-SessionPath
+  $missing = @()
+  if (-not (Resolve-Python)) { $missing += 'Python 3.12' }
+  if (-not (Get-Command 'ollama.exe' -ErrorAction SilentlyContinue)) { $missing += 'Ollama' }
+  if (-not (Get-Command 'docker.exe' -ErrorAction SilentlyContinue)) { $missing += 'Docker Desktop' }
+  if ($missing.Count) {
+    throw @"
+winget is not available on this PC, and the installer needs it to install: $($missing -join ', ').
+winget ships with Microsoft's App Installer - get it from https://aka.ms/getwinget
+(Windows Sandbox and LTSC editions do not include it by default).
+Or install the missing tools manually, open a new terminal, and re-run with -Resume.
+"@
+  }
+}
 
 Write-Card 'localai Friend Bootstrapper' @(
   "Repo: $RepoRoot",

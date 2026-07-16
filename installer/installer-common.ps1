@@ -169,6 +169,40 @@ function Set-OllamaHostEnv {
 # would let ANY installed extension talk to Ollama. See docs/webbrain.md.
 $script:WebBrainOrigin = 'chrome-extension://ljhijonmfahplgbbacgcfnaihbjljhhb'
 
+function Test-OllamaApi {
+  try {
+    [void](Invoke-RestMethod -Uri 'http://localhost:11434/api/version' -TimeoutSec 3)
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Start-OllamaServer {
+  # Phase 5b needs the server up for `ollama pull`, but `localai start` (which
+  # launches Ollama) only runs in Phase 5c - review finding localai-wgz. Mirror
+  # start.py's launch-the-app-then-wait pattern. Launched from this process, so
+  # it inherits the session copies of the Ollama env vars set in Phase 5a.
+  [CmdletBinding(SupportsShouldProcess)]
+  param([int]$TimeoutSec = 60)
+  if (Test-OllamaApi) { return $true }
+  if (-not $PSCmdlet.ShouldProcess('Ollama', 'launch detached')) { return $true }
+  $app = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+  if (Test-Path -LiteralPath $app) {
+    Start-Process -FilePath $app -WindowStyle Hidden | Out-Null
+  } else {
+    $cli = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
+    if (-not $cli) { return $false }
+    Start-Process -FilePath $cli.Source -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+  }
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    if (Test-OllamaApi) { return $true }
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+
 function Add-OllamaUserOrigin {
   # Append one origin to the user-scope OLLAMA_ORIGINS. Never clobbers: a
   # user's existing custom entries are kept and the origin is only added once.
