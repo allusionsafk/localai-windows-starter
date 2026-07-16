@@ -46,14 +46,41 @@ $IntentLabels = [ordered]@{
   voice  = 'voice'
 }
 
+function Test-PythonCandidate {
+  # A candidate must actually run AND be >=3.12 before we trust it. Guards
+  # against the Microsoft Store python.exe alias stub, stale py launchers that
+  # don't know 3.12 (they exit with 'Python 3.12 not found' / 103), and old
+  # pythons shadowing a fresh install (clean-VM finding, v0.1.4).
+  param([Parameter(Mandatory)][string[]]$Candidate)
+  $rest = Get-PyRest -Py $Candidate
+  $probe = Invoke-AiProcess -FilePath $Candidate[0] `
+    -ArgumentList ($rest + @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)')) -TimeoutSec 20
+  return ($probe.Code -eq 0)
+}
+
 function Resolve-Python {
-  # Prefer the py launcher pinned to 3.12, else python on PATH (audit finding 9:
-  # winget-installed tools need PATH refresh / absolute invocation).
+  # Prefer the py launcher pinned to 3.12, else a real python on PATH, else
+  # winget's default per-user install dir (PATH can be stale even after
+  # Update-SessionPath). Every candidate is probed before use; only a probed
+  # success is cached.
+  if ($script:ResolvedPython) { return $script:ResolvedPython }
   Update-SessionPath
+  $candidates = @()
   $py = Get-Command 'py.exe' -ErrorAction SilentlyContinue
-  if ($py) { return @($py.Source, '-3.12') }
+  if ($py) { $candidates += , @($py.Source, '-3.12') }
   $python = Get-Command 'python.exe' -ErrorAction SilentlyContinue
-  if ($python) { return @($python.Source) }
+  if ($python -and $python.Source -notmatch '\\WindowsApps\\') {
+    # WindowsApps python.exe is the Store redirect stub, not an interpreter.
+    $candidates += , @($python.Source)
+  }
+  $direct = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\python.exe'
+  if (Test-Path -LiteralPath $direct) { $candidates += , @($direct) }
+  foreach ($candidate in $candidates) {
+    if (Test-PythonCandidate -Candidate $candidate) {
+      $script:ResolvedPython = $candidate
+      return $candidate
+    }
+  }
   return $null
 }
 
@@ -148,10 +175,16 @@ function Invoke-PhasePip {
   Write-Card 'Phase 3b - Install localai (editable)' @('py -3.12 -m pip install -e .[windows]')
   if ($PSCmdlet.ShouldProcess('.[windows]', 'pip install -e')) {
     $py = Resolve-Python
-    if (-not $py) { throw 'Python still not on PATH after install; open a new shell and -Resume.' }
+    if (-not $py) {
+      throw 'No working Python >=3.12 found (checked py -3.12, python.exe outside WindowsApps, and the winget default dir). Open a new terminal and re-run with -Resume.'
+    }
+    Write-Host "   using interpreter: $($py -join ' ')" -ForegroundColor DarkGray
     $pipArgs = (Get-PyRest -Py $py) + @('-m', 'pip', 'install', '-e', '.[windows]')
     $r = Invoke-AiProcess -FilePath $py[0] -ArgumentList $pipArgs -TimeoutSec 900 -WorkingDirectory $RepoRoot
-    if ($r.Code -ne 0) { throw "pip install failed: $($r.Text)" }
+    if ($r.Code -ne 0) {
+      $tail = (($r.Text -split "`r?`n") | Select-Object -Last 6) -join "`n"
+      throw "pip install failed (exit $($r.Code)) using '$($py -join ' ')':`n$tail"
+    }
   }
 }
 
