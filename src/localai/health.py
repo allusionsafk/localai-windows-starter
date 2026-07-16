@@ -49,13 +49,6 @@ ALIAS_SOURCES = {
     "terminal-agent-qwen3-coder-30b": "qwen3-coder:30b",
     "vision-qwen2.5vl-7b": "qwen2.5vl:7b",
 }
-KNOWN_DEFAULT_ALIASES = {
-    "voice-qwen3-grounded",
-    "deep-thinking-qwen3.6",
-    "full-thinking-qwen3.6",
-    "web-search-deep-qwen3.6",
-}
-
 
 @dataclass
 class Counters:
@@ -249,11 +242,13 @@ def check_model_config(
     default_model: str,
     task_model: str | None,
 ) -> None:
-    base = default_model.removesuffix(":latest")
-    if base.endswith("-grounded") or base in KNOWN_DEFAULT_ALIASES:
+    # Compose's DEFAULT_MODELS is the deliberate source of truth (the installer
+    # rewrites it per pick; tests read it dynamically) - any non-empty value is
+    # a valid configuration, so only an unset default warns.
+    if default_model:
         add_line("OK", "Default model", default_model)
     else:
-        add_line("WARN", "Default model", default_model)
+        add_line("WARN", "Default model", "DEFAULT_MODELS not set in docker-compose.yml")
 
     if task_model == "":
         add_line("OK", "Task model", "blank; tasks use the current chat model")
@@ -416,6 +411,12 @@ def smoke_tiny_inference(model: str, *, timeout_sec: int = 60) -> SmokeResult:
             "model": model,
             "prompt": "ping",
             "stream": False,
+            # think=False: a thinking model otherwise spends the single
+            # predicted token on a THINKING token and returns empty content
+            # (measured 2026-07-16 on the reference box: bare chat burned 99.7s
+            # of reasoning; think=False answered in 0.5s). The smoke measures
+            # responsiveness, not reasoning.
+            "think": False,
             "options": {"num_predict": 1},
             "keep_alive": "30m",
         }

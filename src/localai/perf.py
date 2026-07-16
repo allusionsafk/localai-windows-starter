@@ -68,16 +68,11 @@ def collect_perf_report(
     else:
         add_line("FAIL", "Ollama binary", f"missing: {ollama}")
 
+    # Compose's DEFAULT_MODELS is the deliberate source of truth; any set value
+    # is a valid configuration.
     default_model = read_default_model()
-    if default_model == "qwen2.5-grounded":
-        add_line("OK", "Daily default", "qwen2.5-grounded")
-    elif default_model:
-        add_line(
-            "WARN",
-            "Daily default",
-            f"{default_model} is configured; qwen2.5-grounded is the responsive "
-            "default",
-        )
+    if default_model:
+        add_line("OK", "Daily default", default_model)
     else:
         add_line(
             "WARN",
