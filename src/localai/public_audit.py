@@ -53,14 +53,24 @@ def collect_public_audit_report(
             )
         ]
 
-    patterns = build_patterns(extra_patterns)
+    origin = get_github_origin_repo()
+    patterns = build_patterns(extra_patterns, owner=origin[0] if origin else None)
     findings = scan_files(tracked, patterns)
+    findings, allowed_self_refs = partition_self_references(findings, origin)
 
     stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
     lines = [f"==== localai public-readiness audit ====  {stamp}"]
     lines.append(
         format_status_line("OK", "tracked files", f"{len(tracked)} files scanned")
     )
+    if allowed_self_refs:
+        lines.append(
+            format_status_line(
+                "OK",
+                "origin self-refs",
+                f"{allowed_self_refs} allowed reference(s) to the origin repo",
+            )
+        )
 
     if not findings:
         lines.append(
@@ -107,7 +117,11 @@ def format_status_line(level: str, name: str, detail: str) -> str:
     return f"[{level}] {name:<22} {detail}"
 
 
-def build_patterns(extra_patterns: tuple[str, ...] = ()) -> list[AuditPattern]:
+def build_patterns(
+    extra_patterns: tuple[str, ...] = (),
+    *,
+    owner: str | None = None,
+) -> list[AuditPattern]:
     username = os.environ.get("USERNAME", "")
     computer_name = os.environ.get("COMPUTERNAME", "")
     # Use \s+ (not a literal space) so this definition line does not match
@@ -134,7 +148,6 @@ def build_patterns(extra_patterns: tuple[str, ...] = ()) -> list[AuditPattern]:
         AuditPattern("Laptop hardware", hardware_pattern),
     ]
 
-    owner = get_github_owner_from_origin()
     if owner:
         patterns.append(AuditPattern("Origin GitHub owner", rf"\b{re.escape(owner)}\b"))
 
@@ -144,7 +157,7 @@ def build_patterns(extra_patterns: tuple[str, ...] = ()) -> list[AuditPattern]:
     return patterns
 
 
-def get_github_owner_from_origin() -> str | None:
+def get_github_origin_repo() -> tuple[str, str] | None:
     result = run_command(["git", "remote", "get-url", "origin"], cwd=REPO_ROOT)
     if result.code != 0 or not result.stdout.strip():
         return None
@@ -152,7 +165,36 @@ def get_github_owner_from_origin() -> str | None:
     match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)", result.stdout.strip())
     if match is None:
         return None
-    return match.group(1)
+    return match.group(1), match.group(2)
+
+
+def partition_self_references(
+    findings: list[Finding],
+    origin: tuple[str, str] | None,
+) -> tuple[list[Finding], int]:
+    """Drop 'Origin GitHub owner' hits that reference the origin repo itself.
+
+    A public repo legitimately names its own origin (release URLs, bootstrap
+    source, LICENSE copyright holder); only bare owner mentions elsewhere leak.
+    """
+    if origin is None:
+        return findings, 0
+    owner, repo = origin
+    self_ref = re.compile(rf"\b{re.escape(owner)}/{re.escape(repo)}(?![\w-])")
+    copyright_line = re.compile(r"^Copyright\b")
+    kept: list[Finding] = []
+    allowed = 0
+    for finding in findings:
+        if finding.kind == "Origin GitHub owner":
+            is_self_url = bool(self_ref.search(finding.text))
+            is_license_copyright = finding.file == "LICENSE" and bool(
+                copyright_line.match(finding.text)
+            )
+            if is_self_url or is_license_copyright:
+                allowed += 1
+                continue
+        kept.append(finding)
+    return kept, allowed
 
 
 def scan_files(

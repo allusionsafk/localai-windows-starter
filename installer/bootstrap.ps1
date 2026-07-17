@@ -21,7 +21,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$Owner = 'allusionsafk',
+  [string]$Owner = 'allusionsafk',   # canonical source: allusionsafk/localai-windows-starter
   [string]$Repo = 'localai-windows-starter',
   [string]$Ref = 'v0.1.5',
   # Filled once the tag is cut; verified after fetch. Empty = not yet pinned.

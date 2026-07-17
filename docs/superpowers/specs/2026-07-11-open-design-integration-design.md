@@ -8,7 +8,7 @@ Integrate [Open Design](https://github.com/nexu-io/open-design) (open-source,
 Apache-2.0, local-first design studio; v0.14.1 at time of writing) as a
 **first-class optional component** of the localai stack:
 
-- On the user's own box (`C:\Users\jidan\localai` runs the same stack): Open
+- On the maintainer's own box (the private `localai` repo runs the same stack): Open
   Design generating design artifacts **driven only by the local Ollama** —
   no cloud engine.
 - In the public `localai-windows-starter`: an opt-in module that installs,

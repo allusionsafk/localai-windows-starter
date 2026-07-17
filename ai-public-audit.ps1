@@ -30,12 +30,12 @@ function Escape-RegexLiteral([string]$Text) {
   [regex]::Escape($Text)
 }
 
-function Get-GitHubOwnerFromOrigin {
+function Get-GitHubOriginRepo {
   try {
     $url = (git remote get-url origin 2>$null)
     if ($LASTEXITCODE -ne 0 -or -not $url) { return $null }
     if ($url -match 'github\.com[:/](?<owner>[^/]+)/(?<repo>[^/.]+)') {
-      return $Matches.owner
+      return @{ Owner = $Matches.owner; Repo = $Matches.repo }
     }
   } catch {}
   return $null
@@ -73,9 +73,9 @@ $patterns = @(
   @{ Name = 'Laptop hardware'; Pattern = $hardwarePattern }
 )
 
-$originOwner = Get-GitHubOwnerFromOrigin
-if ($originOwner) {
-  $patterns += @{ Name = 'Origin GitHub owner'; Pattern = '\b' + (Escape-RegexLiteral $originOwner) + '\b' }
+$origin = Get-GitHubOriginRepo
+if ($origin) {
+  $patterns += @{ Name = 'Origin GitHub owner'; Pattern = '\b' + (Escape-RegexLiteral $origin.Owner) + '\b' }
 }
 
 foreach ($p in $ExtraPattern) {
@@ -96,8 +96,28 @@ foreach ($entry in $patterns) {
   }
 }
 
+# A public repo legitimately names its own origin (release URLs, bootstrap
+# source, LICENSE copyright holder); only bare owner mentions elsewhere leak.
+$allowedSelfRefs = 0
+if ($origin) {
+  $selfRefPattern = '\b' + (Escape-RegexLiteral ($origin.Owner + '/' + $origin.Repo)) + '(?![\w-])'
+  $kept = New-Object System.Collections.Generic.List[object]
+  foreach ($f in $findings) {
+    if ($f.Kind -eq 'Origin GitHub owner') {
+      $isSelfUrl = $f.Text -match $selfRefPattern
+      $isLicenseCopyright = ($f.File -eq 'LICENSE') -and ($f.Text -match '^Copyright\b')
+      if ($isSelfUrl -or $isLicenseCopyright) { $allowedSelfRefs++; continue }
+    }
+    $kept.Add($f)
+  }
+  $findings = $kept
+}
+
 Write-Host "==== localai public-readiness audit ====  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Line 'OK' 'tracked files' "$($tracked.Count) files scanned"
+if ($allowedSelfRefs -gt 0) {
+  Line 'OK' 'origin self-refs' "$allowedSelfRefs allowed reference(s) to the origin repo"
+}
 
 if ($findings.Count -eq 0) {
   Line 'OK' 'private markers' 'no built-in marker patterns found'
