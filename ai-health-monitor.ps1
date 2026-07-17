@@ -19,7 +19,10 @@ param(
   [int]$RepairTimeoutSec = 900
 )
 
-$ErrorActionPreference = 'SilentlyContinue'
+# 'Stop' so unexpected failures surface (exit code + error text) instead of
+# being silently swallowed; intentionally-optional steps (notify, log trim,
+# state load, lock release) each carry their own local try/catch.
+$ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 $LogDir = Join-Path $Root 'logs'
 $LogFile = Join-Path $LogDir 'health-monitor.log'
