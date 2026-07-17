@@ -50,13 +50,20 @@ class ServeStatus:
     code: int
     text: str
     proxy_targets: tuple[str, ...] = ()
+    funnel_targets: tuple[str, ...] = ()
 
     def proxies_to_port(self, port: int) -> bool:
         """True if any Serve handler proxies to the given local port."""
-        needles = (f"127.0.0.1:{port}", f"localhost:{port}")
-        return any(
-            needle in target for needle in needles for target in self.proxy_targets
-        )
+        return _targets_include_port(self.proxy_targets, port)
+
+    def funnel_exposes_port(self, port: int) -> bool:
+        """True if a Funnel-enabled hostport fronts the given local port."""
+        return _targets_include_port(self.funnel_targets, port)
+
+
+def _targets_include_port(targets: tuple[str, ...], port: int) -> bool:
+    needles = (f"127.0.0.1:{port}", f"localhost:{port}")
+    return any(needle in target for needle in needles for target in targets)
 
 
 def collect_anywhere_report(
@@ -188,18 +195,21 @@ def collect_anywhere_report(
         if apply:
             apply_failure = apply_failure or 13
 
-    funnel = run_command([str(tailscale), "funnel", "status"], timeout_sec=15)
-    funnel_text = normalize_whitespace(funnel.text)
-    if (
-        funnel.code == 0
-        and re.search(r"https?://", funnel_text)
-        and not re.search(r"not enabled|tailnet only", funnel_text)
-    ):
+    # Funnel exposure comes from the same 'serve status --json' payload
+    # (AllowFunnel), scoped to the hostports that actually front our port -
+    # a Funnel on an unrelated service is not public exposure of localai.
+    if serve_status.code == 0 and serve_status.funnel_exposes_port(port):
         add_line(
             "WARN",
             "Tailscale Funnel",
-            "public internet sharing appears enabled; use Serve, not Funnel, "
-            "for localai",
+            "PUBLIC internet exposure is enabled for the localai frontend; "
+            "use Serve, not Funnel, for localai",
+        )
+    elif serve_status.funnel_targets:
+        add_line(
+            "OK",
+            "Tailscale Funnel",
+            "Funnel is enabled for another service, not the localai frontend",
         )
     else:
         add_line(
@@ -301,7 +311,7 @@ def get_tailscale_self(tailscale: Path, port: int) -> TailscaleSelf:
     try:
         payload = json.loads(status.text)
         self_node = payload.get("Self") or {}
-        ips = tuple(str(ip) for ip in self_node.get("TailscaleIPs", []) if ip)
+        ips = tuple(str(ip) for ip in self_node.get("TailscaleIPs") or [] if ip)
         dns = str(self_node.get("DNSName") or "").rstrip(".")
         online = bool(self_node.get("Online"))
         backend = str(payload.get("BackendState") or "")
@@ -354,7 +364,12 @@ def get_serve_status(tailscale: Path) -> ServeStatus:
     except json.JSONDecodeError:
         return ServeStatus(status.code, text, ())
 
-    return ServeStatus(status.code, text, tuple(extract_proxy_targets(payload)))
+    return ServeStatus(
+        status.code,
+        text,
+        tuple(extract_proxy_targets(payload)),
+        tuple(extract_funnel_targets(payload)),
+    )
 
 
 def extract_proxy_targets(payload: dict[str, Any]) -> list[str]:
@@ -362,12 +377,29 @@ def extract_proxy_targets(payload: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     web = payload.get("Web") or {}
     for host_entry in web.values():
-        handlers = (host_entry or {}).get("Handlers") or {}
-        for handler in handlers.values():
-            proxy = (handler or {}).get("Proxy")
-            if proxy:
-                targets.append(str(proxy))
+        targets.extend(_host_entry_proxies(host_entry))
     return targets
+
+
+def extract_funnel_targets(payload: dict[str, Any]) -> list[str]:
+    """Proxy targets of hostports that AllowFunnel exposes to the internet."""
+    allow = payload.get("AllowFunnel") or {}
+    targets: list[str] = []
+    web = payload.get("Web") or {}
+    for hostport, host_entry in web.items():
+        if not allow.get(hostport):
+            continue
+        targets.extend(_host_entry_proxies(host_entry))
+    return targets
+
+
+def _host_entry_proxies(host_entry: Any) -> list[str]:
+    handlers = (host_entry or {}).get("Handlers") or {}
+    return [
+        str(handler["Proxy"])
+        for handler in handlers.values()
+        if handler and handler.get("Proxy")
+    ]
 
 
 def normalize_whitespace(text: str) -> str:

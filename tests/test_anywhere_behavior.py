@@ -103,6 +103,72 @@ def test_get_serve_status_handles_malformed_json(
     assert status.proxy_targets == ()
 
 
+def test_get_serve_status_scopes_funnel_to_hostport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Funnel enabled for an unrelated hostport must not read as public
+    # exposure of the localai frontend (and vice versa).
+    payload = (
+        '{"Web":{'
+        '"host.tailnet.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}},'
+        '"host.tailnet.ts.net:8443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9999"}}}'
+        '},"AllowFunnel":{"host.tailnet.ts.net:8443":true}}'
+    )
+
+    def fake_run_command(args: list[str], *, timeout_sec: int) -> CommandResult:
+        return CommandResult(tuple(args), 0, payload, "")
+
+    monkeypatch.setattr(anywhere, "run_command", fake_run_command)
+
+    status = anywhere.get_serve_status(Path("tailscale.exe"))
+
+    assert status.proxies_to_port(3000)
+    assert not status.funnel_exposes_port(3000)
+    assert status.funnel_exposes_port(9999)
+
+
+def test_get_serve_status_funnel_on_our_frontend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = (
+        '{"Web":{"host.tailnet.ts.net:443":{"Handlers":'
+        '{"/":{"Proxy":"http://127.0.0.1:3000"}}}},'
+        '"AllowFunnel":{"host.tailnet.ts.net:443":true}}'
+    )
+
+    def fake_run_command(args: list[str], *, timeout_sec: int) -> CommandResult:
+        return CommandResult(tuple(args), 0, payload, "")
+
+    monkeypatch.setattr(anywhere, "run_command", fake_run_command)
+
+    status = anywhere.get_serve_status(Path("tailscale.exe"))
+
+    assert status.funnel_exposes_port(3000)
+
+
+def test_get_tailscale_self_handles_null_ips_when_signed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Live 'tailscale status --json' while signed out (BackendState NoState)
+    # reports "TailscaleIPs": null; that must read as not-connected with the
+    # sign-in hint, not a TypeError swallowed into the detail line.
+    payload = (
+        '{"BackendState":"NoState","Self":{"DNSName":null,"TailscaleIPs":null,'
+        '"Online":false,"HostName":"box"}}'
+    )
+
+    def fake_run_command(args: list[str], *, timeout_sec: int) -> CommandResult:
+        return CommandResult(tuple(args), 0, payload, "")
+
+    monkeypatch.setattr(anywhere, "run_command", fake_run_command)
+
+    self = anywhere.get_tailscale_self(Path("tailscale.exe"), 3000)
+
+    assert not self.connected
+    assert self.ips == ()
+    assert "sign in" in self.detail
+
+
 def _setup_anywhere(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -110,7 +176,7 @@ def _setup_anywhere(
     owui: int = 200,
     serve_code: int = 0,
     serve_proxies: bool = True,
-    funnel_text: str = "(tailnet only)",
+    funnel_targets: tuple[str, ...] = (),
 ) -> None:
     monkeypatch.setattr(
         anywhere, "read_text_if_exists", lambda p: "127.0.0.1:3000:8080"
@@ -128,7 +194,9 @@ def _setup_anywhere(
     )
     targets = ("http://127.0.0.1:3000",) if serve_proxies else ()
     monkeypatch.setattr(
-        anywhere, "get_serve_status", lambda ts: anywhere.ServeStatus(0, "s", targets)
+        anywhere,
+        "get_serve_status",
+        lambda ts: anywhere.ServeStatus(0, "s", targets, funnel_targets),
     )
 
     def fake_run_command(
@@ -142,8 +210,6 @@ def _setup_anywhere(
         if "serve" in a:
             code = serve_code
             return CommandResult(tuple(a), code, "consent" if code else "", "")
-        if "funnel" in a:
-            return CommandResult(tuple(a), 0, funnel_text, "")
         return CommandResult(tuple(a), 0, "", "")
 
     monkeypatch.setattr(anywhere, "run_command", fake_run_command)
@@ -179,3 +245,31 @@ def test_anywhere_audit_backend_down_is_warn_exit_0(
     _setup_anywhere(monkeypatch, owui=0)
     code, _ = anywhere.collect_anywhere_report(apply=False)
     assert code == 0
+
+
+def _funnel_line(lines: list[str]) -> str:
+    return next(line for line in lines if "Tailscale Funnel" in line)
+
+
+def test_anywhere_funnel_on_localai_frontend_warns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_anywhere(monkeypatch, funnel_targets=("http://127.0.0.1:3000",))
+    _, lines = anywhere.collect_anywhere_report(apply=False)
+    assert _funnel_line(lines).startswith("[WARN]")
+
+
+def test_anywhere_funnel_on_unrelated_service_is_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _setup_anywhere(monkeypatch, funnel_targets=("http://127.0.0.1:9999",))
+    _, lines = anywhere.collect_anywhere_report(apply=False)
+    line = _funnel_line(lines)
+    assert line.startswith("[OK]")
+    assert "another service" in line
+
+
+def test_anywhere_no_funnel_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    _setup_anywhere(monkeypatch)
+    _, lines = anywhere.collect_anywhere_report(apply=False)
+    assert _funnel_line(lines).startswith("[OK]")

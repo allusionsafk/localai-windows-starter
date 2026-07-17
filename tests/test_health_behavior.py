@@ -311,3 +311,51 @@ def test_terminal_launchers_present_reports_ok_partial_warns(
     lines.clear()
     health.check_terminal_launchers(lambda s, n, d: lines.append((s, n, d)))
     assert lines == []
+
+
+def _tailscale_lines(
+    monkeypatch: pytest.MonkeyPatch, serve_targets: tuple[str, ...]
+) -> list[tuple[str, str, str]]:
+    from pathlib import Path
+
+    from localai.anywhere import ServeStatus
+
+    monkeypatch.setattr(health, "resolve_tailscale", lambda: Path("tailscale.exe"))
+    signed_in = (
+        '{"BackendState":"Running","Self":{"DNSName":"x.ts.net.",'
+        '"TailscaleIPs":["100.64.1.2"],"Online":true}}'
+    )
+    monkeypatch.setattr(
+        health,
+        "run_command",
+        lambda args, *, cwd=None, timeout_sec=None: CommandResult(
+            tuple(args), 0, signed_in, ""
+        ),
+    )
+    monkeypatch.setattr(
+        health,
+        "get_serve_status",
+        lambda ts: ServeStatus(0, "s", serve_targets),
+    )
+    lines: list[tuple[str, str, str]] = []
+    health.check_tailscale(lambda s, n, d: lines.append((s, n, d)))
+    return lines
+
+
+def test_check_tailscale_anywhere_url_ok_when_serve_fronts_our_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = _tailscale_lines(monkeypatch, ("http://127.0.0.1:3000",))
+    status, _, detail = next(row for row in lines if row[1] == "Anywhere URL")
+    assert status == "OK"
+    assert detail == "https://x.ts.net"
+
+
+def test_check_tailscale_anywhere_url_warns_on_unrelated_serve_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression guard for the old broad ':3000' text match: Serve fronting
+    # some other port must not be reported as localai's anywhere URL.
+    lines = _tailscale_lines(monkeypatch, ("http://127.0.0.1:9999",))
+    status, _, _ = next(row for row in lines if row[1] == "Anywhere URL")
+    assert status == "WARN"

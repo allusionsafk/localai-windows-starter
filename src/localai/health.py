@@ -15,7 +15,11 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from localai import compose, firewall
-from localai.anywhere import normalize_whitespace, resolve_tailscale
+from localai.anywhere import (
+    get_serve_status,
+    normalize_whitespace,
+    resolve_tailscale,
+)
 from localai.ops import run_command
 from localai.paths import REPO_ROOT, repo_path
 from localai.perf import read_default_model, read_default_model_params, read_task_model
@@ -216,13 +220,10 @@ def check_tailscale(add_line: AddLine) -> None:
         except (TypeError, json.JSONDecodeError) as exc:
             add_line("WARN", "Tailnet login", str(exc))
 
-    serve = run_command(
-        [str(tailscale), "serve", "status"], cwd=REPO_ROOT, timeout_sec=15
-    )
-    serve_text = normalize_whitespace(serve.text)
-    if serve.code == 0 and re.search(
-        r"127\.0\.0\.1:3000|localhost:3000|:3000", serve_text
-    ):
+    # Structured 'serve status --json' scoped to our port - the old broad
+    # ':3000' text match could claim an unrelated Serve mapping as ours.
+    serve_status = get_serve_status(tailscale)
+    if serve_status.code == 0 and serve_status.proxies_to_port(3000):
         add_line(
             "OK",
             "Anywhere URL",
