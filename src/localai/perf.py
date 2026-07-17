@@ -476,9 +476,10 @@ def test_loaded_models(add_line: AddLine) -> None:
     # Disk sizes let each loaded model split weights vs context cost.
     try:
         tags = ollama_api("/api/tags", timeout_sec=10)
+        tag_models = tags.get("models")
         disk_sizes = {
             str(m.get("name")): as_float(m.get("size"))
-            for m in tags.get("models", [])
+            for m in (tag_models if isinstance(tag_models, list) else [])
             if isinstance(m, dict)
         }
     except (OSError, TimeoutError, URLError, json.JSONDecodeError):
@@ -497,7 +498,9 @@ def test_loaded_models(add_line: AddLine) -> None:
             continue
         total_vram_attr += size_vram
         pct = round((size_vram / size) * 100)
-        segments = [f"{pct}% GPU ({round(size_vram / gib, 1)}/{round(size / gib, 1)} GB)"]
+        segments = [
+            f"{pct}% GPU ({round(size_vram / gib, 1)}/{round(size / gib, 1)} GB)"
+        ]
         weights = disk_sizes.get(label, 0.0)
         if weights > 0:
             # loaded - disk = graph/runtime overhead only. Measured 2026-07-15:

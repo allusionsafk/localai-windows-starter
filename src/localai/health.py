@@ -248,7 +248,9 @@ def check_model_config(
     if default_model:
         add_line("OK", "Default model", default_model)
     else:
-        add_line("WARN", "Default model", "DEFAULT_MODELS not set in docker-compose.yml")
+        add_line(
+            "WARN", "Default model", "DEFAULT_MODELS not set in docker-compose.yml"
+        )
 
     if task_model == "":
         add_line("OK", "Task model", "blank; tasks use the current chat model")
@@ -563,7 +565,9 @@ def check_browser_agent(add_line: AddLine, default_model: str) -> None:
         and "Native Ollama structured output: OK" in text
     ):
         add_line(
-            "OK", "Browser agent Ollama", "origin + native /api/chat structured output OK"
+            "OK",
+            "Browser agent Ollama",
+            "origin + native /api/chat structured output OK",
         )
     else:
         add_line("WARN", "Browser agent Ollama", normalize_whitespace(text))

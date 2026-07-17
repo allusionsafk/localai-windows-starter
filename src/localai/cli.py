@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -26,6 +27,14 @@ from localai.terminal_check import collect_terminal_check_report
 from localai.update import collect_update_report
 from localai.warm import collect_set_default_model_report, collect_warm_report
 from localai.webui_seed import collect_webui_seed_report
+
+# Windows consoles often use cp1252, which cannot encode characters like the
+# '→' that show up in report lines; without this every command can crash with
+# UnicodeEncodeError mid-output. Replace unencodable characters instead.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        _reconfigure(errors="replace")
 
 app = typer.Typer(
     add_completion=False,
