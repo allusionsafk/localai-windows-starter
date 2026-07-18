@@ -169,6 +169,19 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 - Python 3.12+
 - PowerShell 7 (the bootstrapper installs it if missing)
 
+## Roadmap: Apple Silicon
+
+macOS is planned, but the current installer is Windows-only. The first Mac
+acceptance target is an M4 system running macOS 14 or newer. The planned path
+keeps Ollama native for Metal acceleration, runs the core chat UI without
+requiring Docker, and sizes models against unified memory instead of dedicated
+VRAM. Docker may remain optional for web search and voice services.
+
+Before calling it supported, the M4 pilot must prove installation, Scout,
+Prepare, chat, health, backup and restore, approval-based updates, sleep/wake,
+thermals, battery impact, and clean uninstall. Final model tiers for 16, 24, 32,
+and 48 GB Macs will be based on measurements, not assumptions.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
