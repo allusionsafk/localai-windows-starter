@@ -169,18 +169,34 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 - Python 3.12+
 - PowerShell 7 (the bootstrapper installs it if missing)
 
-## Roadmap: Apple Silicon
+## Platform roadmap
 
-macOS is planned, but the current installer is Windows-only. The first Mac
-acceptance target is an M4 system running macOS 14 or newer. The planned path
-keeps Ollama native for Metal acceleration, runs the core chat UI without
-requiring Docker, and sizes models against unified memory instead of dedicated
-VRAM. Docker may remain optional for web search and voice services.
+The current installer supports Windows 11 with NVIDIA CUDA. CPU-only systems can
+use the smaller-model tier, but the additional platforms below are planned, not
+supported today.
 
-Before calling it supported, the M4 pilot must prove installation, Scout,
-Prepare, chat, health, backup and restore, approval-based updates, sleep/wake,
-thermals, battery impact, and clean uninstall. Final model tiers for 16, 24, 32,
-and 48 GB Macs will be based on measurements, not assumptions.
+Apple Silicon is first. After Windows v1, an M4 pilot will test native Ollama
+with Metal acceleration, a core chat path that does not require Docker, and
+model fitting based on unified memory instead of dedicated VRAM. Final model
+tiers for 16, 24, 32, and 48 GB Macs will come from real measurements.
+
+Later validation lanes include:
+
+- Native Windows ARM64 and Linux ARM64 packaging, with clear CPU fallback when
+  an accelerator is unavailable.
+- Windows NPUs from Intel, AMD, and Qualcomm through verified runtime providers.
+  This is an evaluation path, not a claim that the current Ollama stack uses the
+  NPU.
+- NVIDIA DGX Spark as a stretch Linux ARM64 and CUDA target. Its unified memory
+  will be budgeted from measured available capacity, not treated as all usable
+  for a model.
+
+The shared goal is one hardware-capability layer for CUDA, Metal, CPU, and future
+NPU providers. Scout and Prepare will use the machine's architecture, memory
+model, available capacity, runtime support, and benchmarks instead of relying on
+a GPU name alone. No platform will be listed as supported until installation,
+chat, health, backup and restore, approval-based updates, sleep/wake where
+applicable, and clean uninstall pass on real hardware.
 
 ## License
 
