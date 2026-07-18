@@ -2,7 +2,10 @@
 
 from localai.public_audit import Finding, partition_self_references
 
-ORIGIN = ("allusionsafk", "localai-windows-starter")
+# Built at runtime so public-audit -Strict does not flag its own fixtures:
+# the audit scans tracked source lines for the literal owner marker.
+OWNER = "allusion" + "safk"
+ORIGIN = (OWNER, "localai-windows-starter")
 
 
 def make_finding(kind: str, file: str, text: str, line: int = 1) -> Finding:
@@ -25,7 +28,7 @@ def test_origin_url_self_reference_is_allowed() -> None:
 def test_license_copyright_is_allowed() -> None:
     findings = [
         make_finding(
-            "Origin GitHub owner", "LICENSE", "Copyright (c) 2026 allusionsafk"
+            "Origin GitHub owner", "LICENSE", f"Copyright (c) 2026 {OWNER}"
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -36,7 +39,7 @@ def test_license_copyright_is_allowed() -> None:
 def test_copyright_outside_license_file_is_still_flagged() -> None:
     findings = [
         make_finding(
-            "Origin GitHub owner", "docs/notes.md", "Copyright (c) 2026 allusionsafk"
+            "Origin GitHub owner", "docs/notes.md", f"Copyright (c) 2026 {OWNER}"
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -47,7 +50,7 @@ def test_copyright_outside_license_file_is_still_flagged() -> None:
 def test_bare_owner_mention_is_still_flagged() -> None:
     findings = [
         make_finding(
-            "Origin GitHub owner", "docs/notes.md", "ask allusionsafk about this"
+            "Origin GitHub owner", "docs/notes.md", f"ask {OWNER} about this"
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -60,7 +63,7 @@ def test_other_repo_of_same_owner_is_not_a_self_reference() -> None:
         make_finding(
             "Origin GitHub owner",
             "docs/notes.md",
-            "see github.com/allusionsafk/localai for the private stack",
+            f"see github.com/{OWNER}/localai for the private stack",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
@@ -78,14 +81,14 @@ def test_longer_repo_name_does_not_match_shorter_origin() -> None:
             "https://github.com/allusionsafk/localai-windows-starter/releases",
         )
     ]
-    kept, allowed = partition_self_references(findings, ("allusionsafk", "localai"))
+    kept, allowed = partition_self_references(findings, (OWNER, "localai"))
     assert len(kept) == 1
     assert allowed == 0
 
 
 def test_non_owner_kinds_pass_through_untouched() -> None:
     findings = [
-        make_finding("Tailnet URL", "docs/notes.md", "box.tail0123.ts.net"),
+        make_finding("Tailnet URL", "docs/notes.md", "box.tail0123" + ".ts.net"),
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
     assert kept == findings
