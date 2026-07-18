@@ -16,6 +16,7 @@ scout-*.Modelfile
 
 # --- Installer runtime state (resume/audit trail; per-machine, never commit) ---
 installer/installer-state.json
+installer/.localai-ref
 
 # --- Python build/test artifacts ---
 __pycache__/

@@ -100,6 +100,32 @@ function Install-Pwsh7 {
   }
 }
 
+function Move-OldCopyAside {
+  # A failed or older install is in the way. Move it aside (NEVER delete a
+  # folder this run did not create) so a fresh verified copy can land, and tell
+  # the user what happened - they should not have to clean up by hand.
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$Reason
+  )
+  $parent = Split-Path -Parent $Path
+  $leaf = Split-Path -Leaf $Path
+  $target = Join-Path $parent "$leaf-old"
+  $n = 1
+  while (Test-Path -LiteralPath $target) {
+    $n++
+    $target = Join-Path $parent "$leaf-old$n"
+  }
+  Write-Host "Found $Reason at $Path." -ForegroundColor Yellow
+  Write-Host "Moving it to $target and installing a fresh copy." -ForegroundColor Yellow
+  Write-Host '(Nothing is deleted - you can remove that folder once the new install works.)' -ForegroundColor Yellow
+  try {
+    Move-Item -LiteralPath $Path -Destination $target -ErrorAction Stop
+  } catch {
+    throw "Could not move $Path out of the way ($($_.Exception.Message)). Close any window or program using that folder, then run this installer again."
+  }
+}
+
 function Get-Repo {
   param([Parameter(Mandatory)][string]$Into)
 
@@ -110,28 +136,41 @@ function Get-Repo {
   $parentResolved = (Resolve-Path -LiteralPath $parent).Path
 
   $git = Get-Command 'git.exe' -ErrorAction SilentlyContinue
+  # Written after a successful zip install; lets a re-run tell "resume of THIS
+  # release" apart from "stale copy of an older one".
+  $refMarker = Join-Path $Into (Join-Path 'installer' '.localai-ref')
+
   if (Test-Path -LiteralPath (Join-Path $Into '.git')) {
-    # Re-run over an existing clone: re-verify the pin instead of trusting it,
-    # but never delete a folder this run did not create.
-    Write-Host "Repo already present at $Into; skipping clone." -ForegroundColor DarkGray
+    # Re-run over an existing clone: re-verify the pin instead of trusting it.
+    # A match is a resume; a mismatch (failed or older install) is moved aside
+    # automatically so the user never has to delete a folder by hand.
     if ($git -and $ExpectedCommit) {
       $head = (& $git.Source -C $Into rev-parse HEAD).Trim()
-      if ($head -ne $ExpectedCommit) {
-        throw "Existing folder $Into is at commit $head, not the pinned $ExpectedCommit. Rename or delete that folder, then re-run to get a verified copy."
+      if ($head -eq $ExpectedCommit) {
+        Write-Host "Repo already present at $Into (verified commit $head); using it." -ForegroundColor DarkGray
+        return
       }
-      Write-Host "Verified existing commit $head." -ForegroundColor Green
-    }
-    return
-  }
-  if (Test-Path -LiteralPath $Into) {
-    # A non-git folder is already there. Reuse it only if it looks like this
-    # repo (e.g. a completed zip install); otherwise ask the user to move it -
-    # never silently delete their folder.
-    if (Test-Path -LiteralPath (Join-Path $Into (Join-Path 'installer' 'Install-LocalAI.ps1'))) {
-      Write-Host "Folder already present at $Into; using it." -ForegroundColor DarkGray
+      Move-OldCopyAside -Path $Into -Reason "a previous localai copy at commit $head (this installer expects $ExpectedCommit)"
+      # fall through to a fresh clone below
+    } else {
+      Write-Host "Repo already present at $Into; skipping clone." -ForegroundColor DarkGray
       return
     }
-    throw "Folder $Into already exists but does not look like a $Repo download. Rename or delete it, then re-run."
+  } elseif (Test-Path -LiteralPath $Into) {
+    # A non-git folder is already there (zip install). Reuse it only when its
+    # ref marker proves it is this release (a mid-install resume); anything
+    # older, unmarked, or incomplete is moved aside for a fresh verified copy.
+    $markerRef = ''
+    if (Test-Path -LiteralPath $refMarker) {
+      $raw = Get-Content -LiteralPath $refMarker -Raw -ErrorAction SilentlyContinue
+      if ($raw) { $markerRef = $raw.Trim() }
+    }
+    $orchestratorPresent = Test-Path -LiteralPath (Join-Path $Into (Join-Path 'installer' 'Install-LocalAI.ps1'))
+    if ($markerRef -eq $Ref -and $orchestratorPresent) {
+      Write-Host "Folder already present at $Into (release $Ref); using it." -ForegroundColor DarkGray
+      return
+    }
+    Move-OldCopyAside -Path $Into -Reason 'a previous (older or incomplete) localai folder'
   }
   if ($git) {
     & $git.Source clone --depth 1 --branch $Ref "https://github.com/$Owner/$Repo.git" $Into
@@ -185,11 +224,28 @@ function Get-Repo {
   $inner = Get-ChildItem -LiteralPath $extract -Directory | Select-Object -First 1
   if (-not $inner) { throw 'Downloaded zip had no top-level folder.' }
   Move-Item -LiteralPath $inner.FullName -Destination $Into
+  # Stamp which release this folder is (see $refMarker above).
+  Set-Content -LiteralPath $refMarker -Value $Ref -Encoding ascii
   Remove-Item -LiteralPath $zip, $extract -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 1. Fetch the repo (works under 5.1 or 7).
-Get-Repo -Into $Destination
+# 1. Fetch the repo (works under 5.1 or 7) - unless this bootstrap is already
+# running from inside the destination (the .cmd next to a completed install).
+# In that case the repo is by definition present; re-verifying pins would be
+# wrong, because by the two-commit release dance the copy at any tag carries
+# the PREVIOUS release's pins and would move its own working install aside.
+$selfRepo = ''
+if ($PSScriptRoot) {
+  try {
+    $selfRepo = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
+  } catch { $selfRepo = '' }
+}
+$destFull = [System.IO.Path]::GetFullPath($Destination)
+if ($selfRepo -and ($selfRepo.TrimEnd('\') -ieq $destFull.TrimEnd('\'))) {
+  Write-Host "Running from inside $Destination; using this copy." -ForegroundColor DarkGray
+} else {
+  Get-Repo -Into $Destination
+}
 
 # 2. Hand off to the orchestrator under pwsh 7.
 # NOTE: 5.1-safe nested Join-Path; the 3-argument form is PowerShell 7 only.

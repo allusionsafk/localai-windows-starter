@@ -147,15 +147,34 @@ function Invoke-PhaseVet {
   Write-Card 'Phase 1 - Capability vet' $lines
 }
 
+function Read-IntentByKeypress {
+  # Single-keypress picker: the double-click flow promises "no typing", so the
+  # only interactive phase must not ask anyone to type words. Chat is always
+  # included; single keys toggle the extras; Enter continues.
+  $extras = [ordered]@{ c = 'coding'; w = 'web'; v = 'voice' }
+  $on = @{}
+  foreach ($k in $extras.Keys) { $on[$k] = $false }
+  Write-Card 'Phase 2 - What do you want localai for?' @(
+    'Chat is always included. Want extras? Press a key to toggle them:',
+    '  [C] coding      [W] web browsing      [V] voice',
+    'Then press Enter to continue (or just press Enter for chat only).')
+  while ($true) {
+    $sel = @('chat') + @($extras.Keys | Where-Object { $on[$_] } | ForEach-Object { $extras[$_] })
+    Write-Host ("`r   Selected: " + ($sel -join ', ').PadRight(40)) -NoNewline
+    $key = [Console]::ReadKey($true)
+    if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host ''; return $sel }
+    $ch = ([string]$key.KeyChar).ToLowerInvariant()
+    if ($extras.Contains($ch)) { $on[$ch] = -not $on[$ch] }
+  }
+}
+
 function Invoke-PhaseIntent {
   if ([string]::IsNullOrWhiteSpace($Intent)) {
-    if ($AcceptDefaults) {
+    if ($AcceptDefaults -or [Console]::IsInputRedirected) {
+      # No console to read keys from (piped/CI) behaves like -AcceptDefaults.
       $chosen = @('chat')
     } else {
-      Write-Card 'Phase 2 - What do you want localai for?' @(
-        'Options: chat, coding, web, voice  (comma-separated; default: chat)')
-      $raw = Read-Host 'Intent'
-      $chosen = if ([string]::IsNullOrWhiteSpace($raw)) { @('chat') } else { $raw -split '\s*,\s*' }
+      $chosen = Read-IntentByKeypress
     }
   } else {
     $chosen = $Intent -split '\s*,\s*'
@@ -184,7 +203,7 @@ function Invoke-PhasePip {
   if ($PSCmdlet.ShouldProcess('.[windows]', 'pip install -e')) {
     $py = Resolve-Python
     if (-not $py) {
-      throw 'No working Python >=3.12 found (checked py -3.12, python.exe outside WindowsApps, and the winget default dir). Open a new terminal and re-run with -Resume.'
+      throw 'No working Python >=3.12 found (checked py -3.12, python.exe outside WindowsApps, and the winget default dir). Close this window and run "Install Local AI.cmd" again - a fresh window picks up the new PATH.'
     }
     Write-Host "   using interpreter: $($py -join ' ')" -ForegroundColor DarkGray
     $pipArgs = (Get-PyRest -Py $py) + @('-m', 'pip', 'install', '-e', '.[windows]')
@@ -246,8 +265,10 @@ function Invoke-PhaseOllamaDocker {
     $State.pending_reboot = $true
     Save-InstallerState -State $State -Path $StatePath
     Write-Host ''
-    Write-Host 'ACTION NEEDED: launch Docker Desktop once, finish its setup, then re-run:' -ForegroundColor Yellow
-    Write-Host '   pwsh -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1 -Resume' -ForegroundColor Yellow
+    Write-Host 'ACTION NEEDED: open Docker Desktop once (Start menu), accept its terms, and' -ForegroundColor Yellow
+    Write-Host 'let it finish setting up. If it asks to restart Windows, restart.' -ForegroundColor Yellow
+    Write-Host 'Then double-click "Install Local AI.cmd" again - it continues where it left off.' -ForegroundColor Yellow
+    Write-Host '(Terminal users: pwsh -ExecutionPolicy Bypass -File installer/Install-LocalAI.ps1 -Resume)' -ForegroundColor DarkGray
     return $false   # signal the runner to stop cleanly at the resume point
   }
   return $true
@@ -260,9 +281,9 @@ function Invoke-PhasePulls {
     'ollama pull picks; build Modelfiles; localai model-aliases (needs Ollama running)')
   if ($PSCmdlet.ShouldProcess('models', 'ollama pull + create + aliases')) {
     $ollama = Get-Command 'ollama.exe' -ErrorAction SilentlyContinue
-    if (-not $ollama) { throw 'ollama not on PATH; open a new shell and -Resume.' }
+    if (-not $ollama) { throw 'ollama is not on PATH yet; close this window and run "Install Local AI.cmd" again.' }
     if (-not (Start-OllamaServer)) {
-      throw 'Ollama server did not become reachable at http://localhost:11434; start Ollama manually, then re-run with -Resume.'
+      throw 'Ollama did not become reachable at http://localhost:11434. Start Ollama from the Start menu, then run "Install Local AI.cmd" again.'
     }
     # Invoke-AiProcess never throws, so a failed pull/create must be surfaced
     # here or the phase is marked done with no model on the box.
@@ -358,7 +379,7 @@ function Invoke-PhaseSecure {
   if ($port3000Reserved) {
     Write-Card 'Port 3000 is reserved by Windows' @(
       'Windows (WinNAT) has reserved port 3000, which the chat UI needs.',
-      'Fix it from an Administrator PowerShell, then re-run with -Resume:',
+      'Fix it from an Administrator PowerShell, then run "Install Local AI.cmd" again:',
       '  net stop winnat',
       '  netsh int ipv4 add excludedportrange protocol=tcp startport=3000 numberofports=1',
       '  net start winnat')
@@ -373,8 +394,10 @@ function Invoke-PhaseSelfTest {
     $health = Invoke-Localai -Arguments @('health') -TimeoutSec 300
     Write-Host $health.Text
     if ($health.Code -ne 0) {
-      Write-Host 'Self-test did not pass. Fix the lines above and re-run with -Resume.' -ForegroundColor Red
-      return
+      Write-Host 'Self-test did not pass. Read the lines above, then run "Install Local AI.cmd" again to retry.' -ForegroundColor Red
+      # Exit non-zero BEFORE the runner marks this phase done: a failed
+      # self-test must neither print "Finished" nor be skipped on the retry.
+      exit 1
     }
   }
   $ready = @(
@@ -425,7 +448,7 @@ if (-not $DryRun -and -not (Get-Command 'winget.exe' -ErrorAction SilentlyContin
 winget is not available on this PC, and the installer needs it to install: $($missing -join ', ').
 winget ships with Microsoft's App Installer - get it from https://aka.ms/getwinget
 (Windows Sandbox and LTSC editions do not include it by default).
-Or install the missing tools manually, open a new terminal, and re-run with -Resume.
+Or install the missing tools manually, then run "Install Local AI.cmd" again.
 "@
   }
 }
@@ -443,7 +466,9 @@ foreach ($phase in $Phases) {
   $result = & $phase.Run
   if ($phase.Name -eq 'ollama-docker' -and $result -eq $false) {
     # Docker Desktop was just installed; stop at the reboot checkpoint.
-    exit 0
+    # Exit 10 is the contract with "Install Local AI.cmd": a planned pause,
+    # not a failure - the .cmd prints "double-click me again", not an error.
+    exit 10
   }
   Set-PhaseDone -State $State -Phase $phase.Name -Path $StatePath
 }
