@@ -50,6 +50,14 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+      - name: Enforce public-readiness boundary
+        if: runner.os == 'Linux'
+        run: python -m localai public-audit --strict
+
+      - name: Check whitespace
+        if: runner.os == 'Linux'
+        run: git diff --check
+
   windows-scripts:
     name: Windows operational gate
     runs-on: windows-2025
