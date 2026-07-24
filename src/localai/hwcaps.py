@@ -293,9 +293,12 @@ def normalize_architecture(value: str) -> str:
 def _windows_total_memory() -> MemoryReading:
     status = _MemoryStatusEx()
     status.dwLength = ctypes.sizeof(_MemoryStatusEx)
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return MemoryReading(None, Evidence.UNKNOWN, "ctypes:GlobalMemoryStatusEx")
     try:
-        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-    except (AttributeError, OSError):
+        ok = windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+    except OSError:
         return MemoryReading(None, Evidence.UNKNOWN, "ctypes:GlobalMemoryStatusEx")
     total = int(status.ullTotalPhys) if ok else 0
     return MemoryReading(
@@ -712,4 +715,3 @@ def format_hardware_report(report: HardwareReport) -> list[str]:
     else:
         lines.append("Warnings: none")
     return lines
-

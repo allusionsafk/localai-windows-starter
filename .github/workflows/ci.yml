@@ -40,7 +40,11 @@ jobs:
       - name: Lint
         run: python -m ruff check --no-cache src tests
 
-      - name: Type-check source and capability seam
+      - name: Type-check portable capability seam
+        run: python -m mypy src/localai/hwcaps.py
+
+      - name: Type-check all source on its supported Windows host
+        if: runner.os == 'Windows'
         run: python -m mypy src tests/test_hwcaps_behavior.py
 
       - name: Run tests
