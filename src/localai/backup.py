@@ -6,7 +6,14 @@ Ported from backup.ps1 and hardened per the reliability audit (#24/#25):
 - the data volume is resolved from the live mount (via compose), not guessed;
 - every archive is integrity-checked (`tar tzf`) and gets a `.sha256` sidecar
   before it is kept, so a corrupt archive is deleted at creation and only
-  verified-good backups are ever retained.
+  verified-good backups are ever retained;
+- every archive is additionally trial-restored in container scratch space and
+  its `webui.db` checked with `PRAGMA integrity_check` (flr.7/flr.31): a
+  tar-valid archive of a corrupt live DB is quarantined as `<name>.bad`
+  instead of being kept as good;
+- retention is tiered (flr.7/flr.34): newest 7 dailies plus the newest archive
+  of each recent ISO week and month, keyed by the filename stamp so copies
+  keep their identity; quarantined `.bad` files never enter the keep-count.
 """
 
 from __future__ import annotations
@@ -80,9 +87,27 @@ def collect_backup_report(
             lines.append(text)
         return 1, lines
 
+    trial = run_command(
+        docker_trial_restore_args(dest, archive_name),
+        cwd=REPO_ROOT,
+        env=compose.docker_env(),
+        timeout_sec=timeout_sec,
+    )
+    if trial.code != 0:
+        bad = quarantine_archive(archive)
+        lines.append(
+            "[!] Trial restore / PRAGMA integrity_check failed; "
+            f"archive quarantined as {bad.name}."
+        )
+        text = trial.text.strip()
+        if text:
+            lines.append(text)
+        return 1, lines
+
     checksum = write_checksum(archive)
     lines.append(f"{archive}  ({size / 1024 / 1024:,.1f} MB)")
     lines.append(f"    integrity OK (tar tzf); sha256 {checksum[:16]}...")
+    lines.append("    trial restore + PRAGMA integrity_check: ok")
     prune_old_backups(dest)
     return 0, lines
 
@@ -130,6 +155,45 @@ def docker_verify_args(dest: Path, archive_name: str) -> list[str]:
     ]
 
 
+def docker_trial_restore_args(dest: Path, archive_name: str) -> list[str]:
+    """Trial-restore the archive's DB into container scratch and PRAGMA-check it.
+
+    Extracts only ``./webui.db`` (the risky content) into the container's own
+    filesystem, then runs ``PRAGMA integrity_check`` with the same interpreter
+    that will read it after a real restore. Exit 0 only when the DB says ok.
+    """
+    check = (
+        "import sqlite3,sys;"
+        "c=sqlite3.connect('file:webui.db?mode=ro&immutable=1',uri=True);"
+        "r=c.execute('PRAGMA integrity_check').fetchone();c.close();"
+        "print(r[0] if r else 'no-result');"
+        "sys.exit(0 if (r and r[0]=='ok') else 1)"
+    )
+    script = (
+        "set -e; mkdir -p /tmp/localai-trial && cd /tmp/localai-trial && "
+        f"tar xzf /backup/{archive_name} ./webui.db && "
+        f'python -c "{check}"'
+    )
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{dest}:/backup:ro",
+        OPEN_WEBUI_IMAGE,
+        "sh",
+        "-c",
+        script,
+    ]
+
+
+def quarantine_archive(archive: Path) -> Path:
+    """Rename a corrupt archive to ``<name>.bad`` so retention never counts it."""
+    bad = archive.with_name(f"{archive.name}.bad")
+    archive.replace(bad)
+    return bad
+
+
 def sha256_of(archive: Path) -> str:
     digest = hashlib.sha256()
     with archive.open("rb") as handle:
@@ -152,15 +216,44 @@ def prune_old_backups(dest: Path) -> None:
         (archive.parent / f"{archive.name}.sha256").unlink(missing_ok=True)
 
 
-def old_backups_to_prune(backups: list[Path]) -> list[Path]:
-    """Keep the 7 newest archives by mtime; return the rest for deletion.
+DAILY_KEEP = 7
+WEEKLY_KEEP = 4
+MONTHLY_KEEP = 12
 
-    Only verified-good archives reach disk (a failed integrity check deletes the
-    archive at creation), so keeping the newest 7 can never evict the last good
-    backup in favour of corrupt ones.
+
+def archive_stamp(archive: Path) -> datetime:
+    """Timestamp encoded in the archive filename (no stat, survives file copies)."""
+    stem = archive.name.removeprefix("open-webui-").removesuffix(".tar.gz")
+    try:
+        return datetime.strptime(stem, "%Y-%m-%d_%H%M%S")
+    except ValueError:
+        return datetime.fromtimestamp(archive.stat().st_mtime)
+
+
+def old_backups_to_prune(backups: list[Path]) -> list[Path]:
+    """Tiered retention: newest 7 plus weekly/monthly representatives.
+
+    Keeps the ``DAILY_KEEP`` newest archives, the newest archive of each of the
+    ``WEEKLY_KEEP`` most recent ISO weeks, and the newest archive of each of
+    the ``MONTHLY_KEEP`` most recent months; returns the rest for deletion.
+    Ages come from the filename stamp, not mtime, so restored or copied files
+    keep their true age. Corrupt archives never reach this list: tar-invalid
+    ones are deleted at creation and DB-corrupt ones are quarantined as
+    ``.bad`` (outside the glob), so retention can only ever choose among
+    verified-good backups (flr.34).
     """
-    newest_first = sorted(backups, key=lambda path: path.stat().st_mtime, reverse=True)
-    return newest_first[7:]
+    newest_first = sorted(backups, key=archive_stamp, reverse=True)
+    keep = set(newest_first[:DAILY_KEEP])
+    weekly: dict[tuple[int, int], Path] = {}
+    monthly: dict[tuple[int, int], Path] = {}
+    for archive in newest_first:
+        stamp = archive_stamp(archive)
+        iso = stamp.isocalendar()
+        weekly.setdefault((iso[0], iso[1]), archive)
+        monthly.setdefault((stamp.year, stamp.month), archive)
+    keep.update(list(weekly.values())[:WEEKLY_KEEP])
+    keep.update(list(monthly.values())[:MONTHLY_KEEP])
+    return [archive for archive in newest_first if archive not in keep]
 
 
 def collect_restore_report(
@@ -194,7 +287,6 @@ def collect_restore_report(
 
     if not confirm:
         lines.append("[!] Restore overwrites the live volume; re-run with --confirm.")
-        lines.append("    Tip: run 'localai backup' first so you can undo this.")
         return 2, lines
 
     status = compose.compose_service_status(service)

@@ -147,10 +147,12 @@ def test_backup_success_verifies_checksums_and_prunes(
         "[*] Backing up Open WebUI data volume...",
         f"{new_archive}  (2.0 MB)",
         "    integrity OK (tar tzf); sha256 aaaaaaaaaaaaaaaa...",
+        "    trial restore + PRAGMA integrity_check: ok",
     ]
-    # backup czf then verify tzf
+    # backup czf, verify tzf, then trial-restore + DB check
     assert calls[0][9] == "czf"
     assert calls[1][7] == "tzf"
+    assert "integrity_check" in " ".join(calls[2])
     pruned_archives = [p for p in unlinked if p.name.endswith(".tar.gz")]
     assert pruned_archives == [
         dest / "open-webui-2026-06-11_120000.tar.gz",
@@ -211,6 +213,81 @@ def test_backup_integrity_failure_removes_archive(
     assert not glob_called
 
 
+def test_docker_trial_restore_args_extract_then_pragma() -> None:
+    dest = Path("C:/repo/backups")
+    args = backup.docker_trial_restore_args(dest, "a.tar.gz")
+    assert args[:5] == ["docker", "run", "--rm", "-v", f"{dest}:/backup:ro"]
+    assert args[5] == backup.OPEN_WEBUI_IMAGE
+    script = args[-1]
+    assert "tar xzf /backup/a.tar.gz" in script
+    assert "./webui.db" in script
+    assert "integrity_check" in script
+
+
+def test_backup_trial_restore_failure_quarantines_archive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dest = Path("C:/repo/backups")
+    new_archive = dest / "open-webui-2026-06-21_211000.tar.gz"
+    renamed: list[tuple[Path, Path]] = []
+    checksum_called = False
+    glob_called = False
+
+    def fake_run_command(
+        args: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout_sec: float | None = None,
+    ) -> CommandResult:
+        if "integrity_check" in " ".join(str(a) for a in args):
+            return CommandResult(
+                tuple(str(a) for a in args), 1, "database disk image is malformed", ""
+            )
+        return _ok(args)
+
+    def fake_checksum(archive: Path) -> str:
+        nonlocal checksum_called
+        checksum_called = True
+        return "x"
+
+    def fake_glob(path: Path, pattern: str) -> list[Path]:
+        nonlocal glob_called
+        glob_called = True
+        return []
+
+    monkeypatch.setattr(Path, "mkdir", lambda *a, **k: None)
+    monkeypatch.setattr(compose, "service_volume_name", lambda *a, **k: None)
+    monkeypatch.setattr(backup, "run_command", fake_run_command)
+    monkeypatch.setattr(backup, "write_checksum", fake_checksum)
+    monkeypatch.setattr(Path, "exists", lambda path: path == new_archive)
+    monkeypatch.setattr(
+        Path, "stat", lambda path: os.stat_result((0, 0, 0, 0, 0, 0, 4096, 0, 1.0, 0))
+    )
+    monkeypatch.setattr(Path, "glob", fake_glob)
+    monkeypatch.setattr(
+        Path, "replace", lambda path, target: renamed.append((path, Path(target)))
+    )
+
+    code, lines = backup.collect_backup_report(
+        now=datetime(2026, 6, 21, 21, 10, 0), backup_dir=dest
+    )
+    assert code == 1
+    assert renamed == [(new_archive, dest / f"{new_archive.name}.bad")]
+    assert any("quarantined" in line for line in lines)
+    assert not checksum_called
+    assert not glob_called
+
+
+def test_quarantine_archive_renames_to_bad(tmp_path: Path) -> None:
+    archive = tmp_path / "open-webui-x.tar.gz"
+    archive.write_bytes(b"x")
+    bad = backup.quarantine_archive(archive)
+    assert not archive.exists()
+    assert bad == tmp_path / "open-webui-x.tar.gz.bad"
+    assert bad.exists()
+
+
 def test_write_checksum_writes_sidecar(tmp_path: Path) -> None:
     archive = tmp_path / "open-webui-x.tar.gz"
     archive.write_bytes(b"hello backup")
@@ -234,6 +311,52 @@ def test_old_backups_to_prune_keeps_newest_seven(tmp_path: Path) -> None:
         "open-webui-2026-06-02_120000.tar.gz",
         "open-webui-2026-06-03_120000.tar.gz",
     ]
+
+
+def test_tiered_retention_keeps_weekly_and_monthly_representatives(
+    tmp_path: Path,
+) -> None:
+    # 7 dailies (Jun 15-21) fill the recent tier. Jun 14 survives as the
+    # newest of ISO week 24, May 20 / Mar 5 as their weeks' newest; Jun 8 is
+    # W24 but older than Jun 14 and not a month representative -> pruned.
+    days = [
+        "2026-06-21", "2026-06-20", "2026-06-19", "2026-06-18",
+        "2026-06-17", "2026-06-16", "2026-06-15",
+        "2026-06-14", "2026-06-08", "2026-05-20", "2026-03-05",
+    ]
+    paths = []
+    for day in days:
+        p = tmp_path / f"open-webui-{day}_120000.tar.gz"
+        p.write_bytes(b"x")
+        paths.append(p)
+    pruned = backup.old_backups_to_prune(paths)
+    assert [p.name for p in pruned] == ["open-webui-2026-06-08_120000.tar.gz"]
+
+
+def test_prune_never_touches_quarantined_bad_archives(tmp_path: Path) -> None:
+    # flr.34 acceptance: a run of corrupt backups (quarantined as .bad) must
+    # not evict previously-validated-good archives.
+    good_days = [f"2026-06-{d:02d}" for d in range(13, 22)]  # Jun 13-21
+    for day in good_days:
+        (tmp_path / f"open-webui-{day}_120000.tar.gz").write_bytes(b"g")
+    for day in ("2026-06-22", "2026-06-23", "2026-06-24"):  # newer, corrupt
+        (tmp_path / f"open-webui-{day}_120000.tar.gz.bad").write_bytes(b"c")
+
+    backup.prune_old_backups(tmp_path)
+
+    names = sorted(p.name for p in tmp_path.iterdir())
+    # Jun 13 falls out (not newest-7, not a week/month representative);
+    # every other good backup and all .bad forensics files remain.
+    assert "open-webui-2026-06-13_120000.tar.gz" not in names
+    for day in good_days[1:]:
+        assert f"open-webui-{day}_120000.tar.gz" in names
+    assert sum(1 for n in names if n.endswith(".bad")) == 3
+
+
+def test_archive_stamp_parses_filename_without_stat(tmp_path: Path) -> None:
+    p = tmp_path / "open-webui-2026-06-21_211000.tar.gz"
+    p.write_bytes(b"x")
+    assert backup.archive_stamp(p) == datetime(2026, 6, 21, 21, 10, 0)
 
 
 _ARCHIVE = Path("C:/b/open-webui-x.tar.gz")
