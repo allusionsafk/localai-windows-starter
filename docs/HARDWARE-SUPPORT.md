@@ -1,6 +1,7 @@
 # Hardware and runtime support
 
-**Verified:** 2026-07-24  
+**Verified:** 2026-07-24
+
 **Policy:** report facts and product support separately; fail closed on unknowns
 
 Run:

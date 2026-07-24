@@ -1,6 +1,7 @@
 # Supply-chain and release policy
 
-**Status:** release-design baseline; not a claim that signed packages exist  
+**Status:** release-design baseline; not a claim that signed packages exist
+
 **Verified:** 2026-07-24
 
 ## What this repository distributes
