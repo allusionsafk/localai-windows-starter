@@ -47,8 +47,13 @@ jobs:
         if: runner.os == 'Windows'
         run: python -m mypy src tests/test_hwcaps_behavior.py
 
-      - name: Run tests
+      - name: Run full supported-host tests
+        if: runner.os == 'Windows'
         run: python -m pytest -q
+
+      - name: Run portable synthetic tests
+        if: runner.os != 'Windows'
+        run: python -m pytest -q tests/test_hwcaps_behavior.py
 
       - name: Enforce public-readiness boundary
         if: runner.os == 'Linux'
@@ -93,7 +98,12 @@ jobs:
 
   dependency-review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    # GitHub reports this repository's Dependency Graph as disabled. The owner
+    # can enable it, then set DEPENDENCY_REVIEW_ENABLED=true to activate this
+    # fail-closed job without another workflow edit.
+    if: >-
+      github.event_name == 'pull_request' &&
+      vars.DEPENDENCY_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

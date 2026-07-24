@@ -40,6 +40,11 @@ pass dependency review, full-history Gitleaks, public-readiness, lint, source
 typing, unit tests, PowerShell/Compose checks, and a clean-machine installer
 gate.
 
+GitHub currently reports this repository's Dependency Graph as disabled, so the
+pinned dependency-review job remains explicitly gated by the repository
+variable `DEPENDENCY_REVIEW_ENABLED=true`. Enable the Dependency Graph first;
+do not set the variable merely to bypass the platform prerequisite.
+
 Use immutable nightly, candidate, and stable identifiers. Only a dedicated
 release job may request `id-token: write` and `attestations: write`. GitHub
 artifact attestations can bind build provenance and SBOM data to released

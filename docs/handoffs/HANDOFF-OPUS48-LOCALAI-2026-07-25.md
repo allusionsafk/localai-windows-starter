@@ -10,7 +10,7 @@ PR: <https://github.com/allusionsafk/localai-windows-starter/pull/1>
   PowerShell/Compose checks, Actionlint, strict public audit with no findings,
   and a full-history Gitleaks scan.
 - CI uses immutable action SHAs, official Windows/Linux/macOS runners,
-  dependency review, strict public audit, and no artifact uploads.
+  a dependency-review gate, strict public audit, and no artifact uploads.
 
 ## Recorded but not rerun
 
@@ -27,6 +27,8 @@ the latest PR matrix is authoritative.
 - Real Apple/Linux/AMD/NPU qualification.
 - Clean-machine install and rollback of this exact branch.
 - Reproducible SBOM, signing, and immutable release manifest.
+- GitHub Dependency Graph is disabled; dependency review remains skipped until
+  the owner enables the graph and sets `DEPENDENCY_REVIEW_ENABLED=true`.
 
 ## Owner decisions
 
