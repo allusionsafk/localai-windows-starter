@@ -108,6 +108,7 @@ A single Python entry point replaces a folder of loose scripts. Highlights:
 | Command | What it does |
 |---|---|
 | `localai vet [--json]` | Probe GPU/VRAM/CPU/RAM/disk → a capability tier |
+| `localai hardware [--json]` | Report hardware facts, evidence, and runtime support separately |
 | `localai start` / `localai stop` | Bring the stack up / down |
 | `localai health` | End-to-end health checks (Ollama, services, search) |
 | `localai dashboard` | pywebview Control Center (localhost:8765) |
@@ -169,34 +170,29 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 - Python 3.12+
 - PowerShell 7 (the bootstrapper installs it if missing)
 
-## Platform roadmap
+## Platform support and roadmap
 
-The current installer supports Windows 11 with NVIDIA CUDA. CPU-only systems can
-use the smaller-model tier, but the additional platforms below are planned, not
-supported today.
+The current installer supports **Windows 11 x64 with NVIDIA CUDA**. CPU-only
+systems use the smaller-model tier and fail closed when GPU detection is absent
+or malformed.
 
-Apple Silicon is first. After Windows v1, an M4 pilot will test native Ollama
-with Metal acceleration, a core chat path that does not require Docker, and
-model fitting based on unified memory instead of dedicated VRAM. Final model
-tiers for 16, 24, 32, and 48 GB Macs will come from real measurements.
+The portable capability layer now detects OS, architecture, physical memory,
+multiple accelerators, memory topology, driver/runtime evidence, and explicit
+warnings. Detection is not an installation-support claim:
 
-Later validation lanes include:
+- **First-class:** Windows 11 x64 + NVIDIA CUDA.
+- **Safe fallback:** CPU capability reporting on Windows, Linux, and macOS.
+- **Experimental:** Apple Silicon unified-memory and Metal reporting.
+- **Research only:** AMD/ROCm, Vulkan, Windows ML/DirectML, ONNX Runtime,
+  Ryzen AI, OpenVINO, Qualcomm QNN, Windows ARM64 acceleration, and DGX Spark.
 
-- Native Windows ARM64 and Linux ARM64 packaging, with clear CPU fallback when
-  an accelerator is unavailable.
-- Windows NPUs from Intel, AMD, and Qualcomm through verified runtime providers.
-  This is an evaluation path, not a claim that the current Ollama stack uses the
-  NPU.
-- NVIDIA DGX Spark as a stretch Linux ARM64 and CUDA target. Its unified memory
-  will be budgeted from measured available capacity, not treated as all usable
-  for a model.
-
-The shared goal is one hardware-capability layer for CUDA, Metal, CPU, and future
-NPU providers. Scout and Prepare will use the machine's architecture, memory
-model, available capacity, runtime support, and benchmarks instead of relying on
-a GPU name alone. No platform will be listed as supported until installation,
-chat, health, backup and restore, approval-based updates, sleep/wake where
-applicable, and clean uninstall pass on real hardware.
+NPUs may be described by synthetic or future platform adapters, but are
+reported as unsupported until this product has a proven runtime, model format,
+and repeatable benchmark. No additional platform becomes supported until
+installation, chat, health, backup/restore, approval-based updates, sleep/wake
+where applicable, rollback, and clean uninstall pass on real hardware. See
+[`docs/HARDWARE-SUPPORT.md`](docs/HARDWARE-SUPPORT.md) for the evidence matrix
+and promotion gates.
 
 ## License
 
