@@ -6,11 +6,16 @@ PR: <https://github.com/allusionsafk/localai-windows-starter/pull/1>
 
 - Customer-safe capability module, CLI integration, Scout compatibility, and
   synthetic tests were mirrored semantically.
-- Local gates: 310 pytest tests, Ruff, source/capability typing,
+- Local gates: 312 pytest tests, Ruff, source/capability typing,
   PowerShell/Compose checks, Actionlint, strict public audit with no findings,
   and a full-history Gitleaks scan.
 - CI uses immutable action SHAs, official Windows/Linux/macOS runners,
   a dependency-review gate, strict public audit, and no artifact uploads.
+- Hosted run `30117251912` passed Windows, Linux, macOS, Windows operational,
+  strict public-audit, and secret-history gates. Dependency review was
+  intentionally skipped because its repository prerequisite is disabled.
+- Missing and blank Windows identity variables are regression-tested and no
+  longer create match-everything audit patterns.
 
 ## Recorded but not rerun
 
@@ -19,8 +24,8 @@ been installed on a fresh machine or released.
 
 ## Inferred
 
-Hosted non-Windows execution is expected from the fail-closed built-in probes;
-the latest PR matrix is authoritative.
+The pure-Python seam runs on hosted Linux and macOS. This does not establish
+real accelerator support on those platforms.
 
 ## Blocked/open
 
@@ -32,6 +37,6 @@ the latest PR matrix is authoritative.
 
 ## Owner decisions
 
-Do not merge or release until hosted CI, semantic diff review, and the
-clean-machine candidate gate are approved. Windows 11 x64 + NVIDIA CUDA remains
-the only first-class installer target.
+Do not merge or release until semantic diff review and the clean-machine
+candidate gate are approved. Latest implementation-head hosted CI is green.
+Windows 11 x64 + NVIDIA CUDA remains the only first-class installer target.
