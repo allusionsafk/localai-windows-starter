@@ -429,3 +429,84 @@ def test_loopback_probe_does_not_follow_redirects() -> None:
     opener = diagnostics._no_redirect_opener()
     handlers = [type(h).__name__ for h in opener.handlers]
     assert any("NoRedirect" in name for name in handlers)
+
+
+# --------------------------------------------------------------------------
+# Adversarial privacy regressions, round 2.
+#
+# Clean-machine validation of 0862929 reproduced these as real leaks. The
+# credential rule matched a key name as one `[A-Za-z0-9_.-]` run, so a key
+# written as a PHRASE ("api key = ...") only redacted when its FINAL word
+# carried a keyword - and bare "key" was not a keyword at all, because a
+# substring rule containing it would have swallowed "monkey" and "keyboard".
+# Credentials embedded in URL userinfo had no rule whatsoever.
+# --------------------------------------------------------------------------
+
+PHRASE_SECRETS = [
+    ("api key = value", "value"),
+    ("API KEY: value", "value"),
+    ("secret key = value", "value"),
+    ("access key=value", "value"),
+    ("Api Key\t=\tv7", "v7"),
+    ("api  key  =  double-spaced", "double-spaced"),
+    ("client secret : shhh", "shhh"),
+    ("auth token = t0ken", "t0ken"),
+    ("registry auth key = deadbeef", "deadbeef"),
+]
+
+URL_USERINFO_SECRETS = [
+    ("http://user:pw-s3cr3t@example.com/x", "pw-s3cr3t"),
+    ("https://admin:hunter2@registry.local/v2", "hunter2"),
+    ("pull failed: https://bob:s3cr3t@proxy.internal:8080/", "s3cr3t"),
+]
+
+#: Ordinary English that merely CONTAINS a keyword must survive: a report that
+#: blanks out unrelated prose stops being diagnostically useful.
+NON_SECRET_ASSIGNMENTS = [
+    "monkey = banana",
+    "keyboard = mechanical",
+    "donkey: grey",
+    "turnkey = yes",
+    "passable = true",
+    "authentic = yes",
+]
+
+#: Plurals of real credential keys stay redacted - under-redacting a genuine
+#: secret is the expensive direction.
+PLURAL_SECRET_KEYS = [
+    ("cookies = a=b; c=d", "a=b"),
+    ("sessions = live-session-id", "live-session-id"),
+    ("api keys = k1,k2", "k1,k2"),
+]
+
+
+@pytest.mark.parametrize(("candidate", "secret"), PHRASE_SECRETS)
+def test_phrase_form_credential_keys_are_redacted(
+    candidate: str, secret: str
+) -> None:
+    for body in (_body_with(detail=candidate), _body_with(health_line=candidate)):
+        text = "\n".join(diagnostics.format_report(body))
+        assert secret not in text, candidate
+
+
+@pytest.mark.parametrize(("candidate", "secret"), URL_USERINFO_SECRETS)
+def test_credentials_in_url_userinfo_are_redacted(
+    candidate: str, secret: str
+) -> None:
+    for body in (_body_with(detail=candidate), _body_with(health_line=candidate)):
+        text = "\n".join(diagnostics.format_report(body))
+        assert secret not in text, candidate
+
+
+@pytest.mark.parametrize("candidate", NON_SECRET_ASSIGNMENTS)
+def test_ordinary_words_containing_a_keyword_are_not_treated_as_secrets(
+    candidate: str,
+) -> None:
+    assert diagnostics.scrub(candidate) == candidate
+
+
+@pytest.mark.parametrize(("candidate", "secret"), PLURAL_SECRET_KEYS)
+def test_plural_credential_keys_are_still_redacted(
+    candidate: str, secret: str
+) -> None:
+    assert secret not in diagnostics.scrub(candidate), candidate

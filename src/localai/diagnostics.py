@@ -41,36 +41,98 @@ _REDACTED_SECRET = "<redacted>"
 _REDACTED_ADDR = "<address>"
 _REDACTED_HOST = "<host>"
 
-#: Key names whose VALUE is a credential. Matched as a substring of the key, so
-#: WEBUI_SECRET_KEY, api-key, X-Auth-Token and OLLAMA_PASSWORD all qualify.
-_SECRET_KEY_WORDS = (
-    "secret",
-    "token",
-    "password",
-    "passwd",
-    "apikey",
-    "api_key",
-    "api-key",
-    "authorization",
-    "auth",
-    "bearer",
-    "credential",
-    "cookie",
-    "session",
+#: Words that mark a key name whose VALUE is a credential.
+_SECRET_KEY_WORDS = frozenset(
+    {
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "key",
+        "apikey",
+        "authorization",
+        "auth",
+        "bearer",
+        "credential",
+        "cookie",
+        "session",
+    }
 )
 
-#: key <sep> value, where the separator may carry arbitrary whitespace and the
-#: value may be quoted. The value is consumed to end-of-line: an auth header
-#: ("Authorization: Bearer abc123") puts the secret in a SECOND token, so a
-#: \S+ value would leave the credential itself in the report. Over-redacting
-#: inside an error line is the safe direction.
-#: The prefix is optional: requiring a leading character meant a bare
-#: "token = value" did not match while "MY_token = value" did.
-_SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b([A-Za-z0-9_.\-]*(?:"
-    + "|".join(re.escape(word) for word in _SECRET_KEY_WORDS)
-    + r")[A-Za-z0-9_.\-]*)[ \t]*[:=][ \t]*[^\r\n]+"
+#: Word separators inside a key name. Key names arrive both as identifiers
+#: (WEBUI_SECRET_KEY, X-Auth-Token) and as prose ("api key"), so underscore,
+#: hyphen, dot and whitespace all end a word.
+_KEY_WORD_SPLIT_RE = re.compile(r"[ \t_.\-]+")
+
+#: A key name is machine-written rather than English when it carries an
+#: underscore, a hyphen, a digit or a run of capitals. Identifier-shaped names
+#: keep the older substring match, so a name concatenated without separators
+#: (APIKEY, AUTHTOKEN) is still caught; prose must match a whole word, so
+#: "monkey" and "keyboard" are no longer mistaken for credentials.
+_IDENTIFIER_SHAPE_RE = re.compile(r"[_\-0-9]|[A-Z]{2,}")
+
+#: A key name immediately followed by its separator. The key may be a PHRASE
+#: of up to five words: "api key = ..." leaked because a single [A-Za-z0-9_.-]
+#: run stopped at the space. Deliberately NOT anchored to the value - matching
+#: to end-of-line here would let a non-credential label ("Docker  : ...")
+#: swallow the rest of the line and hide a real secret further along it.
+_KEY_PHRASE_BEFORE_SEP_RE = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z0-9]+(?:[ \t_.\-]+[A-Za-z0-9]+){0,4})[ \t]*[:=]"
 )
+
+#: Credentials embedded in URL userinfo ("https://bob:s3cr3t@registry/v2").
+#: The host survives: support needs to see which endpoint failed.
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s:@]+:[^/\s@]+@")
+
+
+def _is_secret_key(phrase: str) -> bool:
+    """True when this key name marks its value as a credential.
+
+    Whole words first: each word of the phrase is compared against
+    ``_SECRET_KEY_WORDS``, tolerating a trailing plural "s" so COOKIES and
+    "api keys" stay covered. Identifier-shaped names then fall back to the
+    older substring match, which is what still catches a concatenated AUTHKEY.
+    """
+    for word in _KEY_WORD_SPLIT_RE.split(phrase):
+        lowered = word.casefold()
+        if lowered in _SECRET_KEY_WORDS:
+            return True
+        if lowered.endswith("s") and lowered[:-1] in _SECRET_KEY_WORDS:
+            return True
+    if _IDENTIFIER_SHAPE_RE.search(phrase):
+        lowered_phrase = phrase.casefold()
+        return any(word in lowered_phrase for word in _SECRET_KEY_WORDS)
+    return False
+
+
+def _redact_secret_assignments(text: str) -> str:
+    r"""Blank the value of every credential assignment in ``text``.
+
+    Scans rather than substitutes: a credential's value runs to end-of-line
+    (an auth header puts the secret in a SECOND token, so a \S+ value would
+    leave the credential behind), but consuming to end-of-line is only safe
+    once the key is known to BE a credential. A single regex that swallowed
+    the value first and judged the key afterwards let the report's own
+    "Docker         : ..." label eat the rest of the line, hiding any secret
+    that appeared later in it.
+    """
+    out = text
+    pos = 0
+    while True:
+        match = _KEY_PHRASE_BEFORE_SEP_RE.search(out, pos)
+        if match is None:
+            return out
+        phrase = match.group(1)
+        if not _is_secret_key(phrase):
+            pos = match.end()
+            continue
+        line_end = out.find("\n", match.end())
+        if line_end == -1:
+            line_end = len(out)
+        replacement = f"{phrase}={_REDACTED_SECRET}"
+        out = out[: match.start()] + replacement + out[line_end:]
+        pos = match.start() + len(replacement)
+
 
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -169,7 +231,8 @@ def scrub(text: str) -> str:
     out = text
 
     # 1. Credential values, before anything else rewrites their insides.
-    out = _SECRET_ASSIGNMENT_RE.sub(rf"\1={_REDACTED_SECRET}", out)
+    out = _URL_USERINFO_RE.sub(rf"\1{_REDACTED_SECRET}@", out)
+    out = _redact_secret_assignments(out)
 
     # 2. Network identity. Loopback survives - it is the posture we want to
     #    be able to confirm from a support report.
