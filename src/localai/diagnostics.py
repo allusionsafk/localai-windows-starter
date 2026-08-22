@@ -14,11 +14,14 @@ single emission point in ``format_report``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import re
 import shutil
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +37,71 @@ MAX_ERROR_LINE_CHARS = 200
 
 _REDACTED_USER = "<user>"
 _REDACTED_HOME = r"<home>"
+_REDACTED_SECRET = "<redacted>"
+_REDACTED_ADDR = "<address>"
+_REDACTED_HOST = "<host>"
+
+#: Key names whose VALUE is a credential. Matched as a substring of the key, so
+#: WEBUI_SECRET_KEY, api-key, X-Auth-Token and OLLAMA_PASSWORD all qualify.
+_SECRET_KEY_WORDS = (
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "apikey",
+    "api_key",
+    "api-key",
+    "authorization",
+    "auth",
+    "bearer",
+    "credential",
+    "cookie",
+    "session",
+)
+
+#: key <sep> value, where the separator may carry arbitrary whitespace and the
+#: value may be quoted. The value is consumed to end-of-line: an auth header
+#: ("Authorization: Bearer abc123") puts the secret in a SECOND token, so a
+#: \S+ value would leave the credential itself in the report. Over-redacting
+#: inside an error line is the safe direction.
+#: The prefix is optional: requiring a leading character meant a bare
+#: "token = value" did not match while "MY_token = value" did.
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([A-Za-z0-9_.\-]*(?:"
+    + "|".join(re.escape(word) for word in _SECRET_KEY_WORDS)
+    + r")[A-Za-z0-9_.\-]*)[ \t]*[:=][ \t]*[^\r\n]+"
+)
+
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+#: Only forms containing "::" are matched, so a clock time like 16:33:07 - all
+#: valid hex - is not mistaken for an address and blanked out of a health line.
+_IPV6_RE = re.compile(
+    r"\b(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}"
+)
+
+#: Tailscale magic-DNS names identify both the machine and its owner's tailnet.
+_TAILNET_RE = re.compile(r"\b[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.ts\.net\b")
+
+#: POSIX/macOS home directories. Windows profiles are handled by the prefix
+#: pass plus the C:\Users\<name> backstop below.
+_POSIX_HOME_RE = re.compile(r"(/(?:home|Users)/)[^/\s:\"']+")
+
+
+def _is_loopback_v4(value: str) -> bool:
+    """127.0.0.0/8 and the unspecified address stay: support needs to see them."""
+    if value == "0.0.0.0":  # noqa: S104 - matched as text, not bound
+        return True
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(part) for part in parts]
+    except ValueError:
+        return False
+    if any(octet > 255 for octet in octets):
+        return False  # not a real address; redact rather than reason about it
+    return octets[0] == 127
 
 
 def _home_candidates() -> list[str]:
@@ -68,16 +136,63 @@ def _usernames() -> list[str]:
     return names
 
 
-def scrub(text: str) -> str:
-    """Remove machine-owner identity from a string bound for the report.
+def _hostnames() -> list[str]:
+    """This machine's names, which identify the box to anyone on its network."""
+    names: list[str] = []
+    candidates = [os.environ.get("COMPUTERNAME"), os.environ.get("HOSTNAME")]
+    with contextlib.suppress(OSError):
+        candidates.append(platform.node())
+    for value in candidates:
+        # Short names risk scrubbing unrelated words; skip them.
+        if value and len(value) >= 4 and value not in names:
+            names.append(value)
+    return sorted(names, key=len, reverse=True)
 
-    Replaces home/AppData directory prefixes and the account name. Applied to
-    every emitted line, including ones this module did not author (error text
-    from Docker, Ollama or Python tracebacks).
+
+def scrub(text: str) -> str:
+    """Sanitise a string bound for the report.
+
+    Removes, in this order: credential values, non-loopback network addresses
+    and tailnet hostnames, this machine's hostname, then home directories and
+    the account name. Secrets go first so that a credential which happens to
+    contain an address is destroyed as a unit rather than partially rewritten.
+
+    Applied to every emitted line, including text this module did not author
+    (Docker/Ollama stderr, health-collector output, Python exception messages).
+    An independent review found the earlier version knew only about Windows
+    home paths and the account name, so whitespace-form assignments
+    ("token = value"), colon forms, IPv4/IPv6 addresses, Tailscale magic-DNS
+    names and POSIX/macOS home paths all reached the report intact.
     """
     if not text:
         return text
     out = text
+
+    # 1. Credential values, before anything else rewrites their insides.
+    out = _SECRET_ASSIGNMENT_RE.sub(rf"\1={_REDACTED_SECRET}", out)
+
+    # 2. Network identity. Loopback survives - it is the posture we want to
+    #    be able to confirm from a support report.
+    out = _TAILNET_RE.sub(_REDACTED_HOST, out)
+    out = _IPV6_RE.sub(
+        lambda m: m.group(0) if m.group(0) in ("::1", "::") else _REDACTED_ADDR, out
+    )
+    out = _IPV4_RE.sub(
+        lambda m: m.group(0) if _is_loopback_v4(m.group(0)) else _REDACTED_ADDR, out
+    )
+
+    # 3. This machine's own name, which identifies the box on a network.
+    for host in _hostnames():
+        out = re.sub(
+            rf"(?<![A-Za-z0-9]){re.escape(host)}(?![A-Za-z0-9])",
+            _REDACTED_HOST,
+            out,
+            flags=re.IGNORECASE,
+        )
+
+    # 4. POSIX/macOS home directories (Windows handled by the prefix pass).
+    out = _POSIX_HOME_RE.sub(rf"\1{_REDACTED_USER}", out)
+
     for home in _home_candidates():
         out = out.replace(home, _REDACTED_HOME)
         # Windows paths reach us in both separator styles and both cases.
@@ -247,6 +362,26 @@ def _installer_state() -> dict[str, Any]:
     }
 
 
+_PLAIN_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+:\-]{0,60}$")
+
+
+def _is_plain_version(value: str) -> bool:
+    """Does this look like a bare version string and nothing else?"""
+    return bool(_PLAIN_VERSION_RE.fullmatch(value.strip()))
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse 3xx. Following one off 127.0.0.1 would send a request to whatever
+    host answered, breaking the product's loopback-only posture."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _no_redirect_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoRedirectHandler)
+
+
 def _command_status(argv: list[str], *, timeout_sec: int = 20) -> dict[str, Any]:
     """Run a read-only status command; report reachability, never raise."""
     try:
@@ -257,10 +392,15 @@ def _command_status(argv: list[str], *, timeout_sec: int = 20) -> dict[str, Any]
     text = (getattr(result, "stdout", "") or "").strip()
     err = (getattr(result, "stderr", "") or "").strip()
     detail = text or err
-    return {
-        "ok": code == 0,
-        "detail": detail.splitlines()[0][:MAX_ERROR_LINE_CHARS] if detail else "",
-    }
+    if not detail:
+        return {"ok": code == 0, "detail": ""}
+    first = detail.splitlines()[0][:MAX_ERROR_LINE_CHARS]
+    if code == 0 and not _is_plain_version(first):
+        # Fail closed: a success path is supposed to yield a bare version. Junk
+        # (or a credential the tool decided to print) is replaced rather than
+        # pasted through on the strength of the scrubber alone.
+        return {"ok": True, "detail": "unavailable"}
+    return {"ok": code == 0, "detail": first}
 
 
 def _docker_status() -> dict[str, Any]:
@@ -275,11 +415,8 @@ def _ollama_status() -> dict[str, Any]:
     returned 0), which made this report tell the owner "reachable" about a dead
     engine. Probe the API instead - that is the thing the product needs.
     """
-    import urllib.error
-    import urllib.request
-
     try:
-        with urllib.request.urlopen(
+        with _no_redirect_opener().open(
             "http://127.0.0.1:11434/api/tags", timeout=5
         ) as resp:
             ok = 200 <= resp.status < 300

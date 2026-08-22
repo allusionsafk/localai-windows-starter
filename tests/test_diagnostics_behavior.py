@@ -303,3 +303,129 @@ def test_package_version_matches_pyproject() -> None:
     root = pathlib.Path(__file__).resolve().parents[1]
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     assert data["project"]["version"] == __version__
+
+
+# --------------------------------------------------------------------------
+# Adversarial privacy regressions.
+#
+# Reconciliation with the independent Codex review, which found that the
+# scrubber only knew about Windows home paths and the account name. Every case
+# below was reproduced as a real leak against this implementation before the
+# fix: free text reaches the report through two channels (a command's
+# stdout/stderr `detail`, and the health collector's problem lines), and
+# neither was sanitised beyond home/username.
+# --------------------------------------------------------------------------
+
+SECRET_VALUES = [
+    "SEARXNG_SECRET=hunter2",
+    "token = bearer-private",
+    "password: swordfish",
+    "api_key=sk-private",
+    "API-KEY=another-private-value",
+    "Authorization: Bearer abc123xyz",
+    'WEBUI_SECRET_KEY = "quoted-secret"',
+]
+
+NETWORK_IDENTIFIERS = [
+    "100.64.12.34",
+    "192.168.1.8",
+    "10.0.0.7",
+    "8.8.8.8",
+    "2001:db8::dead:beef",
+    "fd7a:115c:a1e0::1",
+    "alice-pc.tail123.ts.net",
+]
+
+FOREIGN_HOME_PATHS = [
+    "/home/alice/localai/.env",
+    "/Users/Alice/AFK-AI",
+]
+
+
+def _body_with(detail: str = "", health_line: str = "") -> dict[str, object]:
+    body = _fake_report()
+    if detail:
+        body["docker"] = {"ok": False, "detail": detail}
+    if health_line:
+        body["health"] = {"ran": True, "exit_code": 1, "problem_lines": [health_line]}
+    return body
+
+
+@pytest.mark.parametrize("candidate", SECRET_VALUES)
+def test_credential_values_never_survive_command_detail(candidate: str) -> None:
+    text = "\n".join(diagnostics.format_report(_body_with(detail=candidate)))
+    value = candidate.split("=")[-1].split(":")[-1].strip().strip('"')
+    assert value not in text, candidate
+
+
+@pytest.mark.parametrize("candidate", SECRET_VALUES)
+def test_credential_values_never_survive_health_lines(candidate: str) -> None:
+    text = "\n".join(diagnostics.format_report(_body_with(health_line=candidate)))
+    value = candidate.split("=")[-1].split(":")[-1].strip().strip('"')
+    assert value not in text, candidate
+
+
+@pytest.mark.parametrize("addr", NETWORK_IDENTIFIERS)
+def test_non_loopback_network_identifiers_are_redacted(addr: str) -> None:
+    for body in (_body_with(detail=addr), _body_with(health_line=addr)):
+        text = "\n".join(diagnostics.format_report(body))
+        assert addr.casefold() not in text.casefold(), addr
+
+
+@pytest.mark.parametrize("path", FOREIGN_HOME_PATHS)
+def test_posix_and_mac_home_paths_are_redacted(path: str) -> None:
+    text = "\n".join(diagnostics.format_report(_body_with(detail=path)))
+    assert path not in text
+    assert "alice" not in text.casefold()
+
+
+def test_loopback_addresses_are_preserved_because_support_needs_them() -> None:
+    # Redaction must not cost the report its usefulness: 127.0.0.1 and ::1 are
+    # the addresses this product is SUPPOSED to be bound to.
+    text = "\n".join(
+        diagnostics.format_report(_body_with(detail="bound 127.0.0.1:11434 and ::1"))
+    )
+    assert "127.0.0.1" in text
+
+
+def test_the_machine_hostname_is_redacted() -> None:
+    import platform
+
+    node = platform.node()
+    if not node or len(node) < 3:
+        pytest.skip("no usable hostname on this box")
+    text = "\n".join(diagnostics.format_report(_body_with(detail=f"host {node} up")))
+    assert node.casefold() not in text.casefold()
+
+
+def test_scrub_is_applied_at_the_final_output_boundary() -> None:
+    # Even a caller-injected report body - not just probe output - is sanitised,
+    # because scrub runs on the formatted lines rather than on each collector.
+    body = _fake_report()
+    body["windows"] = "Windows 11 token=boundary-secret at 192.168.5.5"
+    text = "\n".join(diagnostics.format_report(body))
+    assert "boundary-secret" not in text
+    assert "192.168.5.5" not in text
+
+
+def test_a_malformed_version_detail_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A probe returning junk (or a secret) instead of a version must collapse to
+    # a fixed word rather than being pasted into the report.
+    class Result:
+        code = 0
+        stdout = "29.7.2\nTOKEN=leaked-by-probe"
+        stderr = ""
+
+    monkeypatch.setattr(diagnostics, "run_command", lambda *a, **k: Result())
+    status = diagnostics._docker_status()
+    assert "leaked-by-probe" not in str(status)
+
+
+def test_loopback_probe_does_not_follow_redirects() -> None:
+    # Following a 3xx off 127.0.0.1 would make an outbound request to whatever
+    # host answered, breaking the loopback-only posture.
+    opener = diagnostics._no_redirect_opener()
+    handlers = [type(h).__name__ for h in opener.handlers]
+    assert any("NoRedirect" in name for name in handlers)

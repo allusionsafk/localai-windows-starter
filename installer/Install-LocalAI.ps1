@@ -438,22 +438,36 @@ function Invoke-PhaseSelfTest {
     '   Diagnostics   localai diagnostics   (safe to send to whoever set this up)')
   Write-Card 'AFK AI is ready' $ready
 
-  # Hand the novice straight into the product rather than leaving a console as
-  # the last thing they saw. `localai start` brings the stack up and opens the
-  # chat in the browser. Skipped under -DryRun, which must change nothing.
+  # Hand the novice into the product in a VISIBLE window, and do not block on it.
+  #
+  # This used to call Invoke-Localai 'start' with a 600s timeout. Invoke-AiProcess
+  # sets CreateNoWindow and buffers both streams via ReadToEndAsync (ai-common.ps1),
+  # so nothing at all is printed until the child exits - while `localai start`
+  # legitimately waits up to 60s for the Ollama API and 180s for the Docker engine
+  # (start.py). The installer therefore sat silent for minutes on exactly the cold
+  # boxes a friend beta targets, which reads as "hung" and invites a hard reboot
+  # mid-setup.
+  #
+  # Start-Process gives the child its own console: the user watches real progress,
+  # and this phase completes immediately. Same pattern the Control Center already
+  # uses for long actions (dashboard.py _launch_console).
   if (-not $DryRun) {
+    $launcher = Join-Path $RepoRoot 'Start Local AI.cmd'
     Write-Host ''
-    Write-Host 'Opening AFK AI now...' -ForegroundColor Green
-    $launch = Invoke-Localai -Arguments @('start') -TimeoutSec 600
-    if ($launch.Code -ne 0) {
-      Write-Host ''
-      Write-Host 'AFK-105 - AFK AI installed, but did not open on its own.' -ForegroundColor Yellow
+    if (Test-Path -LiteralPath $launcher) {
+      try {
+        [void](Start-Process -FilePath $launcher -WorkingDirectory $RepoRoot -PassThru)
+        Write-Host 'Opening AFK AI in a new window - watch that window; the chat' -ForegroundColor Green
+        Write-Host 'opens by itself when everything is ready (can take a few minutes' -ForegroundColor Green
+        Write-Host 'the first time while Docker starts).' -ForegroundColor Green
+      } catch {
+        Write-Host 'AFK-105 - AFK AI installed, but did not open on its own.' -ForegroundColor Yellow
+        Write-Host 'What to do: double-click the "AFK AI" icon on your Desktop.' -ForegroundColor Yellow
+        Write-Host "Advanced: $($_.Exception.Message)" -ForegroundColor DarkGray
+      }
+    } else {
+      Write-Host 'AFK-105 - AFK AI installed, but the launcher is missing.' -ForegroundColor Yellow
       Write-Host 'What to do: double-click the "AFK AI" icon on your Desktop.' -ForegroundColor Yellow
-      Write-Host 'If that also fails, run "AFK AI Control Center.cmd" and use' -ForegroundColor Yellow
-      Write-Host 'Copy Diagnostic Report, then send it to whoever set this up.' -ForegroundColor Yellow
-      Write-Host ''
-      Write-Host '--- Advanced: raw output ---' -ForegroundColor DarkGray
-      Write-Host $launch.Text -ForegroundColor DarkGray
     }
   }
 }
