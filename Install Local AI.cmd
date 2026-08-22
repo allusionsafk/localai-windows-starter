@@ -44,9 +44,26 @@ goto :done
 
 :failed
 echo.
-echo   Something went wrong - read the messages above this line.
-echo   Double-click this file again to retry; it continues where it left
-echo   off and moves any broken old folder aside automatically.
+echo   AFK-200 - Setup stopped before it finished.
+echo.
+echo   What to do first: double-click this file again. Setup continues from
+echo   where it stopped, and moves a broken old folder aside by itself. Most
+echo   problems clear on the second try.
+echo.
+echo   If it stops again, the most common causes are:
+echo     AFK-201  No internet, or a company/school network blocking downloads.
+echo              Check you can open a web page, then try again.
+echo     AFK-203  Docker Desktop is installed but has not finished setup.
+echo              Open Docker Desktop once, finish its setup, then retry.
+echo     AFK-204  Windows needs restarting to finish installing something.
+echo              Restart the PC, then double-click this file again.
+echo     AFK-205  Not enough free disk space. Free up about 40 GB, then retry.
+echo.
+echo   Still stuck? Double-click "AFK AI Control Center.cmd" in this folder
+echo   and use Copy Diagnostic Report, then send that text to whoever set
+echo   this up. It contains no chats, passwords or personal files.
+echo.
+echo   Advanced: the raw technical detail is in the messages above this box.
 
 :done
 echo.

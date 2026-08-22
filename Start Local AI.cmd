@@ -21,19 +21,31 @@ if not errorlevel 1 (
   set "PYCMD=python"
   goto :run
 )
-echo Could not find the Local AI program on this PC.
-echo Run "Install Local AI.cmd" first, then try this again.
+echo.
+echo   AFK-101 - AFK AI is not installed on this PC yet.
+echo   What to do: double-click "Install Local AI.cmd" in this folder, let it
+echo   finish, then use this icon again.
 goto :end
 
 :run
 %PYCMD% -m localai start
 if errorlevel 1 (
   echo.
-  echo Something went wrong - read the messages above this line.
+  echo   AFK-100 - AFK AI could not finish starting up.
+  echo.
+  echo   What to do: make sure Docker Desktop is open and has finished
+  echo   starting (its whale icon near the clock stops animating), then
+  echo   double-click this icon again.
+  echo.
+  echo   Still stuck? Open "AFK AI Control Center.cmd" in this folder and use
+  echo   Copy Diagnostic Report, then send that text to whoever set this up.
+  echo.
+  echo   Advanced: the raw technical detail is in the messages above this box.
   goto :end
 )
 echo.
-echo Chat is at  http://127.0.0.1:3000
+echo   AFK AI is ready. Your chat should have opened in the browser.
+echo   If it did not, open  http://127.0.0.1:3000
 
 :end
 echo.

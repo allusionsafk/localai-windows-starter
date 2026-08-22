@@ -12,6 +12,11 @@ from localai import __version__
 from localai.anywhere import collect_anywhere_report
 from localai.backup import collect_backup_report, collect_restore_report
 from localai.dashboard import serve_dashboard
+from localai.diagnostics import (
+    copy_to_clipboard,
+    format_report,
+    save_report,
+)
 from localai.firewall import collect_firewall_report
 from localai.game_mode import collect_game_mode_report
 from localai.health import collect_health_report
@@ -59,6 +64,42 @@ def main(
     if version:
         typer.echo(f"localai {__version__}")
         raise typer.Exit()
+
+
+@app.command()
+def diagnostics(
+    save: Annotated[
+        Path | None,
+        typer.Option(
+            "--save",
+            help="Also write the report to this file.",
+        ),
+    ] = None,
+    copy: Annotated[
+        bool,
+        typer.Option(
+            "--copy/--no-copy",
+            help="Copy the report to the clipboard (Windows).",
+        ),
+    ] = True,
+) -> None:
+    """Print a privacy-safe diagnostic report to send for support.
+
+    Contains machine and service state only: no chats, documents, prompts,
+    passwords, API tokens, .env values or file contents. The account name and
+    home-directory paths are redacted before anything is printed.
+    """
+    lines = format_report()
+    for line in lines:
+        typer.echo(line)
+    text = chr(10).join(lines)
+    if save is not None:
+        written = save_report(lines, save)
+        typer.echo("")
+        typer.echo(f"Saved to {written}")
+    if copy and copy_to_clipboard(text):
+        typer.echo("")
+        typer.echo("Copied to the clipboard - paste it to whoever set this up.")
 
 
 @app.command()

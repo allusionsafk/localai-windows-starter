@@ -400,18 +400,62 @@ function Invoke-PhaseSelfTest {
       exit 1
     }
   }
+  # Shortcuts before the hand-off: the single most common support question in a
+  # friend beta is "how do I open it again tomorrow?", and the answer must be an
+  # icon, not a remembered command. Best-effort - a shortcut failure never fails
+  # an otherwise-good install.
+  $shortcutLines = Install-ProductShortcuts -RepoRoot $RepoRoot
+  Write-Card 'Phase 7b - Desktop and Start-menu icons' $shortcutLines
+
   $ready = @(
-    'Chat:   http://127.0.0.1:3000        (first signup becomes admin)',
-    'Search: http://127.0.0.1:8080',
-    'Start / stop:  localai start  /  localai stop   (in any terminal)',
-    'Change model:  Open WebUI dropdown, or  localai warm --model <id>',
-    'Security: loopback-only, firewall-blocked on physical adapters, no autostart.')
+    'AFK AI is installed and working.',
+    '',
+    'To use it now or any day from now on:',
+    '   Double-click the "AFK AI" icon on your Desktop.',
+    '   (It is also in the Start menu, under "AFK AI".)',
+    '',
+    'That opens your private chat in the browser. The first account you',
+    'create on it becomes the owner account - there is no signup online,',
+    'nothing leaves this PC, and no password is sent anywhere.',
+    '',
+    'To shut it down: Start menu -> AFK AI -> "Stop AFK AI".',
+    '',
+    'Your PC stays private: this only listens to this computer, it is',
+    'firewalled off from your home network, and it does not start by itself.')
   if (@($State.intent) -contains 'web') {
-    $ready += 'Browser agent: install WebBrain from the Chrome Web Store, set its server URL'
-    $ready += '  to http://localhost:11434, and keep the Chrome window visible during tasks.'
-    $ready += '  Details + troubleshooting: docs/webbrain.md'
+    $ready += ''
+    $ready += 'You chose the browser agent: install WebBrain from the Chrome Web'
+    $ready += 'Store and set its server URL to http://localhost:11434.'
+    $ready += 'Details + troubleshooting: docs/webbrain.md'
   }
-  Write-Card 'localai is ready' $ready
+  $ready += @(
+    '',
+    'Advanced (you do not need any of this):',
+    '   Chat URL      http://127.0.0.1:3000',
+    '   Search URL    http://127.0.0.1:8080',
+    '   Control Center  Start menu -> AFK AI -> AFK AI Control Center',
+    '   Terminal      localai start / localai stop / localai health',
+    '   Diagnostics   localai diagnostics   (safe to send to whoever set this up)')
+  Write-Card 'AFK AI is ready' $ready
+
+  # Hand the novice straight into the product rather than leaving a console as
+  # the last thing they saw. `localai start` brings the stack up and opens the
+  # chat in the browser. Skipped under -DryRun, which must change nothing.
+  if (-not $DryRun) {
+    Write-Host ''
+    Write-Host 'Opening AFK AI now...' -ForegroundColor Green
+    $launch = Invoke-Localai -Arguments @('start') -TimeoutSec 600
+    if ($launch.Code -ne 0) {
+      Write-Host ''
+      Write-Host 'AFK-105 - AFK AI installed, but did not open on its own.' -ForegroundColor Yellow
+      Write-Host 'What to do: double-click the "AFK AI" icon on your Desktop.' -ForegroundColor Yellow
+      Write-Host 'If that also fails, run "AFK AI Control Center.cmd" and use' -ForegroundColor Yellow
+      Write-Host 'Copy Diagnostic Report, then send it to whoever set this up.' -ForegroundColor Yellow
+      Write-Host ''
+      Write-Host '--- Advanced: raw output ---' -ForegroundColor DarkGray
+      Write-Host $launch.Text -ForegroundColor DarkGray
+    }
+  }
 }
 
 # ------------------------------------------------------- phase runner

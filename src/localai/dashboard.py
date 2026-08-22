@@ -32,6 +32,8 @@ from pydantic import BaseModel
 from localai import __version__
 from localai.anywhere import collect_anywhere_report
 from localai.backup import collect_backup_report
+from localai.diagnostics import copy_to_clipboard as _copy_diagnostics
+from localai.diagnostics import format_report as _format_diagnostics
 from localai.firewall import collect_firewall_report
 from localai.game_mode import collect_game_mode_report
 from localai.health import collect_health_report
@@ -357,7 +359,32 @@ def _cherry_studio_check() -> tuple[int, list[str]]:
     return 0, ["Launched Cherry Studio."]
 
 
+def _diagnostics_check() -> tuple[int, list[str]]:
+    """Build the support report and put it on the clipboard in one click.
+
+    The whole point is that a non-technical user never has to select text: the
+    report is copied for them, and the same text stays on screen as a fallback
+    when the clipboard is unavailable.
+    """
+    lines = _format_diagnostics()
+    copied = _copy_diagnostics(chr(10).join(lines))
+    banner = (
+        "Copied to the clipboard - paste it to whoever set this up."
+        if copied
+        else "Could not reach the clipboard; select the text below and copy it."
+    )
+    return 0, [banner, "", *lines]
+
+
 CHECKS: dict[str, DashboardCheck] = {
+    "diagnostics": DashboardCheck(
+        "diagnostics",
+        "Copy Diagnostic Report",
+        "Status",
+        False,
+        "localai diagnostics",
+        _diagnostics_check,
+    ),
     "start": DashboardCheck(
         "start",
         "Start Local AI",
@@ -531,10 +558,20 @@ PENDING_ACTIONS: tuple[dict[str, str], ...] = ()
 
 
 def _app_version() -> str:
-    try:
+    """Release version to show the customer.
+
+    The in-tree constant wins over dist metadata: an editable or upgraded-in-
+    place install can leave stale metadata behind (observed live: metadata
+    reported 0.1.0 while the running source was 0.1.1), which made the Control
+    Center advertise a release the user was not running. Metadata is only a
+    fallback for the case where the constant somehow cannot be imported.
+    """
+    if __version__:
+        return __version__
+    try:  # pragma: no cover - defensive; __version__ always ships with the code
         return package_version("localai")
     except PackageNotFoundError:
-        return __version__
+        return "unknown"
 
 
 def _utcnow() -> datetime:

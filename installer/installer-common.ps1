@@ -259,3 +259,87 @@ function Get-CapabilityTier {
   if (-not $eligible) { return ($Tiers.tiers | Where-Object { $_.id -eq 'CPU' }) }
   return ($eligible | Sort-Object min_vram_gb -Descending | Select-Object -First 1)
 }
+
+# ------------------------------------------------------------- shortcuts
+
+function New-AppShortcut {
+  <#
+    Create a single .lnk. Kept tiny and best-effort on purpose: a shortcut that
+    cannot be written must never fail an otherwise-good install, so every caller
+    treats $false as "warn and carry on".
+  #>
+  [CmdletBinding(SupportsShouldProcess)]
+  param(
+    [Parameter(Mandatory)][string]$LinkPath,
+    [Parameter(Mandatory)][string]$TargetPath,
+    [string]$WorkingDirectory,
+    [string]$Description,
+    [string]$IconLocation
+  )
+  if (-not $PSCmdlet.ShouldProcess($LinkPath, 'create shortcut')) { return $true }
+  try {
+    $parent = Split-Path -Parent $LinkPath
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+      [void](New-Item -ItemType Directory -Path $parent -Force)
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($LinkPath)
+    $lnk.TargetPath = $TargetPath
+    if ($WorkingDirectory) { $lnk.WorkingDirectory = $WorkingDirectory }
+    if ($Description) { $lnk.Description = $Description }
+    if ($IconLocation) { $lnk.IconLocation = $IconLocation }
+    $lnk.Save()
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Install-ProductShortcuts {
+  <#
+    Give the customer a Start-menu folder and a Desktop icon so reopening the
+    product tomorrow is a double-click, not a remembered terminal command.
+
+    Per-user locations only (no admin needed, nothing written to Program Files),
+    which keeps the installer's non-elevated path intact.
+
+    Returns a string[] of human-readable result lines for the ready card.
+  #>
+  [CmdletBinding(SupportsShouldProcess)]
+  param(
+    [Parameter(Mandatory)][string]$RepoRoot,
+    [string]$ProductName = 'AFK AI'
+  )
+  $lines = @()
+  $startDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\$ProductName"
+  $desktop = [Environment]::GetFolderPath('Desktop')
+
+  $launcher = Join-Path $RepoRoot 'Start Local AI.cmd'
+  $control = Join-Path $RepoRoot 'AFK AI Control Center.cmd'
+  $stop = Join-Path $RepoRoot 'Stop Local AI.cmd'
+
+  $targets = @(
+    @{ Name = $ProductName;                     Target = $launcher; Desc = "Start $ProductName and open the chat"; Desktop = $true }
+    @{ Name = "$ProductName Control Center";    Target = $control;  Desc = "Open the $ProductName Control Center"; Desktop = $false }
+    @{ Name = "Stop $ProductName";              Target = $stop;     Desc = "Shut $ProductName down";               Desktop = $false }
+  )
+
+  foreach ($t in $targets) {
+    if (-not (Test-Path -LiteralPath $t.Target)) {
+      $lines += "skipped $($t.Name) (missing $(Split-Path -Leaf $t.Target))"
+      continue
+    }
+    $ok = New-AppShortcut -LinkPath (Join-Path $startDir "$($t.Name).lnk") `
+      -TargetPath $t.Target -WorkingDirectory $RepoRoot -Description $t.Desc
+    if ($ok) { $lines += "Start menu: $($t.Name)" }
+    else { $lines += "could not create the Start-menu entry for $($t.Name)" }
+
+    if ($t.Desktop -and $desktop) {
+      $ok = New-AppShortcut -LinkPath (Join-Path $desktop "$($t.Name).lnk") `
+        -TargetPath $t.Target -WorkingDirectory $RepoRoot -Description $t.Desc
+      if ($ok) { $lines += "Desktop icon: $($t.Name)" }
+      else { $lines += "could not create the Desktop icon for $($t.Name)" }
+    }
+  }
+  return $lines
+}
