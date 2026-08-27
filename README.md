@@ -1,67 +1,87 @@
-# localai-windows-starter
+# AFK AI for Windows
 
-A private, local AI workspace for Windows — a self-hosted alternative to
-cloud chat apps. Runs a chat UI, a private web-search engine, and local
-voice, with models served by **Ollama** on your own GPU. Nothing leaves your
-PC unless you explicitly opt in.
+> **Friend Beta · 0.1.7rc1** — Windows-first, local-first, and still rough around the edges.
 
-> **Windows-first.** The stack targets Windows 11 with an NVIDIA GPU + Docker
-> Desktop. Model sizes and context lengths are chosen from *your* hardware, not
-> a fixed reference machine — see [Capability tiers](#capability-tiers).
+AFK AI is a private, ChatGPT-style AI workspace for Windows. The model runs on
+your own machine through **Ollama**; Open WebUI provides chat, SearXNG provides
+optional web search, and local voice is available through Kokoro.
+
+**Model inference and chat history stay on your PC.** Setup/model downloads and
+web searches you explicitly trigger use the internet.
+
+- **Website:** https://localai-windows-starter-site.allusionsafk.workers.dev/
+- **Source:** https://github.com/allusionsafk/localai-windows-starter
+- **Current beta pin:** `v0.1.7rc1`
+
+> **Windows-first.** The current beta targets Windows 11 with an NVIDIA GPU and
+> Docker Desktop. Model sizes and context lengths are chosen from *your*
+> hardware rather than a fixed reference machine — see
+> [Capability tiers](#capability-tiers).
 
 ## What you get
 
 | Service | URL (loopback-only by default) | What it is |
 |---|---|---|
 | Open WebUI | http://localhost:3000 | The chat UI (ChatGPT-style) |
-| SearXNG | http://localhost:8080 | Private metasearch for in-chat web search |
+| SearXNG | http://localhost:8080 | Local metasearch front end for optional web search |
 | Kokoro TTS | http://localhost:8880 | Local neural voice talk-back (CPU, no VRAM) |
 | Ollama | http://localhost:11434 | Model server, running natively on the host |
 
 Open WebUI and SearXNG run in Docker (`docker-compose.yml`); Ollama runs
 natively on the Windows host so it can use the GPU directly.
 
-## Security contract
+## Privacy and security contract
 
-This stack is **loopback-only and manual-start by design**:
+The AFK AI stack is **loopback-only by default**:
 
-- **No network exposure by default.** Every port binds to `127.0.0.1`. Sharing
-  to your other devices is a separate, explicit opt-in via Tailscale Serve
-  (`ai-anywhere.ps1`) — never a raw LAN/`0.0.0.0` bind.
-- **No autostart.** No scheduled tasks, no Docker restart policies, no
-  auto-launch. Starting the stack is always a manual choice.
+- **No LAN exposure by default.** Every AFK AI port binds to `127.0.0.1`.
+  Sharing to your other devices is a separate, explicit opt-in via Tailscale
+  Serve (`ai-anywhere.ps1`) — never a raw LAN/`0.0.0.0` bind.
+- **Local inference.** Ollama serves the model on your own machine; Open WebUI's
+  local database stores the chat UI's account and history on that machine.
+- **Internet use is explicit and bounded.** The installer and model downloads
+  need the internet. If you enable web search, SearXNG sends search queries to
+  external search providers. That is separate from local model inference.
 - **Secrets stay local.** `.env` is gitignored; copy `.env.example` to `.env`
   and generate your own `SEARXNG_SECRET`.
+- **Third-party startup settings are separate.** AFK AI does not need to run all
+  the time, but Docker Desktop and Ollama each have their own Windows startup
+  preferences. Use AFK AI's Start/Stop controls for the stack itself.
 - **The first Open WebUI account you create becomes the local admin/owner.** It
-  is stored only in the local database.
+  is stored in the local Open WebUI database, not an AFK AI cloud account.
 
 ## Quick start
 
-### Easiest: double-click (no PowerShell needed)
+### Easiest: download from the AFK AI site
 
-1. Download **`Install Local AI.cmd`** from the
-   [latest release](https://github.com/allusionsafk/localai-windows-starter/releases/latest).
-2. Double-click it. Windows shows a security box because the file was downloaded —
-   click **More info → Run anyway** (blue box) or **Run** (yellow box). This is
-   expected; it's a short script you can open in Notepad first to read.
-   If there is **no "Run anyway" option at all**, your PC has **Smart App Control**
-   turned on, which blocks unsigned scripts outright — turn it off under Windows
-   Security → App & browser control → Smart App Control, or use the PowerShell
-   method below.
-3. Follow the on-screen prompts. It picks models that fit *your* PC and sets
-   everything up. When it finishes, your chat is at http://127.0.0.1:3000.
+1. Open the [AFK AI website](https://localai-windows-starter-site.allusionsafk.workers.dev/)
+   and choose **Download AFK AI for Windows**. The site serves the installer
+   pinned to the current friend-beta tag after verifying its SHA-256.
+2. Double-click **`Install AFK AI.cmd`**. Windows may show a security prompt for
+   a downloaded unsigned script. You can open the file in Notepad first to
+   inspect it before running it.
+3. Follow the on-screen prompts. The installer checks the machine, installs
+   missing prerequisites where supported, picks a model that fits the GPU, and
+   brings up the local stack.
+4. If Windows/Docker reports that hardware virtualization is disabled, stop
+   there and enable virtualization in firmware before continuing.
+
+> If Windows Smart App Control blocks the installer without offering a normal
+> run option, **do not disable Smart App Control just for this beta**. Use the
+> source/PowerShell path below instead so you can inspect exactly what runs.
 
 After setup, double-click **`Start Local AI.cmd`** / **`Stop Local AI.cmd`** to
-start and stop it — no typing. Both live in the install folder,
-**`%USERPROFILE%\localai`** (e.g. `C:\Users\You\localai\Start Local AI.cmd`).
+start and stop the stack. They live in the install folder,
+**`%USERPROFILE%\localai`** (for example,
+`C:\Users\You\localai\Start Local AI.cmd`).
 
 ### Guided installer (PowerShell)
 
 The Friend Bootstrapper vets your hardware, picks fitting models, brings up the
 stack loopback-only, and hands off to health checks.
 
-On a machine that doesn't have this repo yet, open **Windows PowerShell**
-(press Start, type "powershell", press Enter) and paste these two lines:
+On a machine that doesn't have this repo yet, open **Windows PowerShell** and
+paste these two lines:
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1 -OutFile "$env:TEMP\localai-bootstrap.ps1"
@@ -98,7 +118,7 @@ localai start
 localai health
 
 # 5. Open the chat UI
-#    http://localhost:3000  → create your admin account on first visit
+#    http://localhost:3000  → create your local admin account on first visit
 ```
 
 ## The `localai` control CLI
@@ -163,7 +183,12 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 
 ## Requirements
 
-- Windows 11 with an NVIDIA GPU (CPU-only works but is slow — see the tiers)
+Current friend-beta target:
+
+- Windows 11
+- NVIDIA GPU recommended (CPU-only works with smaller models, but is slow)
+- Hardware virtualization enabled for Docker Desktop
+- Roughly 40 GB of free disk for a comfortable first install
 - [Ollama](https://ollama.com) (native Windows install)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - Python 3.12+
@@ -197,6 +222,12 @@ model, available capacity, runtime support, and benchmarks instead of relying on
 a GPU name alone. No platform will be listed as supported until installation,
 chat, health, backup and restore, approval-based updates, sleep/wake where
 applicable, and clean uninstall pass on real hardware.
+
+## Project naming
+
+AFK AI is the product name. The repository and internal package still use
+`localai` in several places for continuity. This project is **not affiliated
+with, or endorsed by, mudler/LocalAI or localai.io**.
 
 ## License
 
