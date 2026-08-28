@@ -42,8 +42,8 @@ What those phases do today:
    can complete its own first-launch/reboot work.
 6. **Pulls/builds the selected model**, brings up the compose stack, and seeds
    the Open WebUI DB.
-7. **Secures by default** — loopback-focused binds, the physical-adapter
-   firewall block, and the WinNAT port-3000 check/fix guidance.
+7. **Applies network guardrails** — loopback-focused Docker publishes, the
+   physical-adapter firewall block, and the WinNAT port-3000 check/fix guidance.
 8. **Self-tests + hands off** — gates on `localai health`, then prints URLs and
    start/stop/model guidance.
 
@@ -81,9 +81,12 @@ with live revalidation and safer state recovery; it is not implemented yet.
 
 The installer is designed around these project constraints:
 
-- **No LAN exposure by default.** AFK AI service ports are intended to stay
-  local unless a separate sharing feature is explicitly enabled. Ollama's host
-  binding used by Docker is paired with the project's firewall guardrail.
+- **Local-network guardrails.** Docker-published UI/search/voice ports use
+  loopback. Ollama deliberately binds to `0.0.0.0:11434` so Docker can reach the
+  native Windows service; the later `secure` phase attempts to block AFK AI ports
+  on physical Wi-Fi/Ethernet adapters. The Ollama socket itself is therefore not
+  a loopback-only bind, and a declined/failed firewall step must not be described
+  as if the guardrail succeeded.
 - **No AFK AI cloud account.** Open WebUI's first local signup becomes the local
   owner/admin.
 - **No blanket Windows-security workaround.** Do not instruct users to disable
