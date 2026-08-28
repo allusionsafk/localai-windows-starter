@@ -20,7 +20,7 @@ web searches you explicitly trigger use the internet.
 
 ## What you get
 
-| Service | URL (loopback-only by default) | What it is |
+| Service | Local URL | What it is |
 |---|---|---|
 | Open WebUI | http://localhost:3000 | The chat UI (ChatGPT-style) |
 | SearXNG | http://localhost:8080 | Local metasearch front end for optional web search |
@@ -32,11 +32,14 @@ natively on the Windows host so it can use the GPU directly.
 
 ## Privacy and security contract
 
-The AFK AI stack is **loopback-only by default**:
+AFK AI is designed to keep its user-facing services local by default:
 
-- **No LAN exposure by default.** Every AFK AI port binds to `127.0.0.1`.
-  Sharing to your other devices is a separate, explicit opt-in via Tailscale
-  Serve (`ai-anywhere.ps1`) — never a raw LAN/`0.0.0.0` bind.
+- **Local-network guardrails.** Docker-published UI, search, and voice ports bind
+  to `127.0.0.1`. Ollama binds to `0.0.0.0:11434` so Docker containers can reach
+  the native Windows service; the installer later attempts to apply a Windows
+  Firewall block for AFK AI ports on physical Wi-Fi/Ethernet adapters. Sharing
+  to your other devices is a separate, explicit opt-in via Tailscale Serve
+  (`ai-anywhere.ps1`). Do not treat the Ollama socket itself as loopback-only.
 - **Local inference.** Ollama serves the model on your own machine; Open WebUI's
   local database stores the chat UI's account and history on that machine.
 - **Internet use is explicit and bounded.** The installer and model downloads
@@ -89,7 +92,8 @@ start and stop the stack. They live in the install folder,
 ### Guided installer (PowerShell)
 
 The Friend Bootstrapper vets your hardware, picks fitting models, brings up the
-stack loopback-only, and hands off to health checks.
+local stack with the network guardrails described above, and hands off to health
+checks.
 
 On a machine that doesn't have this repo yet, open **Windows PowerShell** and
 paste these two lines:
