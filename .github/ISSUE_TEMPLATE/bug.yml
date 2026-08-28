@@ -1,0 +1,54 @@
+name: General bug
+description: Report a reproducible AFK AI problem that is not primarily installation or hardware compatibility.
+title: "[bug] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please report one reproducible problem. For setup failures use the installation form; for security vulnerabilities use private vulnerability reporting.
+  - type: input
+    id: version
+    attributes:
+      label: AFK AI version or commit
+      placeholder: v0.1.7rc1
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Affected area
+      placeholder: Control Center, health check, model scout, local chat, web search...
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Include exact error text when useful, after removing sensitive material.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitised diagnostic details
+      description: Optional. Do not include credentials, private documents, chats, prompts, cookies, tokens, .env values, or unrelated machine data.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed secrets, credentials, chats, prompts, documents, and unrelated personal or machine information.
+          required: true
