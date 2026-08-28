@@ -56,10 +56,10 @@ clean-machine run can reach Docker Desktop before Windows exposes the real
 virtualization/WSL blocker, and an installed-but-unhealthy Docker engine is not
 identified early enough.
 
-This is a known limitation, not a completed fix. The implementation-ready design
-for the next installer unit lives at:
+This is a known limitation, not a completed fix. A separate implementation-ready
+design is under review in starter PR #3:
 
-`docs/design/virtualization-docker-preflight.md`
+https://github.com/allusionsafk/localai-windows-starter/pull/3
 
 That future unit will add early classification, precise recoverable actions, a
 live readiness gate before model pulls, and resumable revalidation after a fix
