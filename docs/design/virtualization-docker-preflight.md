@@ -1,18 +1,30 @@
 # Virtualization / Docker / WSL preflight and resumable recovery
 
 Status: **implementation-ready design; runtime not implemented**  
-Target: next bounded AFK AI installer unit after the current ValClip production cycle  
 Scope: Windows Friend Beta installer only
+
+This revision incorporates an adversarial merge-readiness review. In particular,
+it distinguishes firmware virtualization from the Windows hypervisor launch state,
+does not assume every healthy Docker Desktop installation uses WSL 2, and refuses
+to accept a remote Docker context as proof that the local AFK AI environment is
+ready.
 
 ## Problem statement
 
-A clean-machine Friend Beta run reached Python setup, model selection, and Docker Desktop installation, then Docker reported that virtualization support was unavailable. The installer had already done useful work, but it discovered the platform blocker too late and the outer `.cmd` reduced the failure path to the generic `Something went wrong` message.
+A clean-machine Friend Beta run reached Python setup, model selection, and Docker
+Desktop installation, then Docker reported that virtualization support was
+unavailable. The installer had already done useful work, but it discovered the
+platform blocker too late and the outer `.cmd` reduced the failure path to the
+generic `Something went wrong` message.
 
-The next installer unit should classify Windows virtualization, WSL, and Docker readiness **before expensive/product-specific setup continues**, give one precise recovery action, persist a durable checkpoint, and revalidate on the next run.
+The next installer unit should classify the local Windows virtualization and
+Docker environment before expensive/product-specific setup continues, give one
+precise recovery action for known blockers, persist a durable checkpoint, and
+revalidate the machine on every rerun.
 
-This document does not implement system-changing behaviour. It maps the current code and defines the state model, insertion points, probes, tests, safety boundary, and handoff contract for the implementation agent.
+This document does **not** implement system-changing behaviour.
 
-## 1. Current flow (verified from `master`)
+## 1. Current flow, verified from `master`
 
 Entry path:
 
@@ -20,15 +32,13 @@ Entry path:
 Install Local AI.cmd
   -> installer/bootstrap.ps1
        -> verify/fetch pinned repository payload
-       -> ensure PowerShell 7
+       -> resolve/install PowerShell 7
        -> installer/Install-LocalAI.ps1
             -> installer/installer-common.ps1 state helpers
             -> phase runner
 ```
 
-`bootstrap.ps1` is the clean-machine bootstrap. It can run under Windows PowerShell 5.1, installs/resolves PowerShell 7, obtains the pinned repository copy, then launches `Install-LocalAI.ps1` under PowerShell 7.
-
-`Install-LocalAI.ps1` currently executes these phases in order:
+The current orchestrator runs:
 
 ```text
 vet
@@ -46,19 +56,29 @@ self-test
 
 Important current behaviour:
 
-- `vet` measures GPU/VRAM/RAM/CPU/disk and chooses a capability tier. It does **not** classify firmware virtualization, Windows virtualization features, WSL readiness, or Docker-engine health.
-- Python and the editable `localai` package are installed before Docker readiness is known.
+- `bootstrap.ps1` can start under Windows PowerShell 5.1, then resolves or
+  installs PowerShell 7 before launching `Install-LocalAI.ps1`.
+- `vet` measures hardware/model capability; it does **not** classify firmware
+  virtualization, Windows virtualization features, WSL readiness, Docker
+  context, or Docker-engine health.
+- Python and the editable `localai` package are installed before Docker readiness
+  is known.
 - model scouting runs before Docker readiness is known.
-- `ollama-docker` checks only whether `docker.exe` resolves. If it does not, the phase installs Docker Desktop, sets `pending_reboot = true`, saves state, prints a manual Docker/restart instruction, and returns `$false`.
-- the runner maps that `$false` to process exit code `10`, which `Install Local AI.cmd` treats as a planned Docker checkpoint.
-- if `docker.exe` **does exist**, `ollama-docker` currently returns success without proving that the Docker engine, WSL backend, Windows hypervisor path, or required reboot state is healthy.
-- `pulls` follows immediately and may download a model after that weak Docker-presence check.
-- compose/startup is therefore capable of discovering an environment failure later than it should.
-- any non-checkpoint non-zero exit reaches the `.cmd` `:failed` label and ends with the generic `Something went wrong - read the messages above this line.`
+- `ollama-docker` primarily treats `docker.exe` existence as Docker presence.
+- if Docker is absent, the current phase installs Docker Desktop, writes
+  `pending_reboot = true`, and exits through the existing planned checkpoint.
+- if `docker.exe` exists, the phase can succeed without proving that a **local**
+  Docker Desktop Linux engine is running.
+- `pulls` follows later and can download/build a model before the environment has
+  passed a strong Docker-readiness gate.
+- unexpected non-checkpoint failures eventually reach the `.cmd` generic
+  `Something went wrong` path.
 
-## 2. Existing persistence / resume mechanism
+That is the failure mechanism this unit is intended to change.
 
-`installer/installer-common.ps1` stores `installer-state.json` next to the installer. Current schema:
+## 2. Existing persistence and why it is not yet sufficient
+
+Current `installer-state.json` is effectively:
 
 ```json
 {
@@ -71,176 +91,177 @@ Important current behaviour:
 }
 ```
 
-`Set-PhaseDone` appends completed phase names and saves after each phase. Re-running the root `.cmd` therefore skips completed phases even without an explicit `-Resume` flag. The `-Resume` flag currently mainly affects the `pending_reboot` reset behaviour.
+Current behaviour has useful resumability but several weaknesses:
 
-Current weaknesses relevant to this design:
+- writes use direct `Set-Content`, not an atomic replacement contract;
+- corrupt JSON requires manual deletion;
+- `pending_reboot` does not say why the checkpoint exists;
+- no classifier/probe version is persisted;
+- a completed phase can be skipped even though machine state changed later;
+- there is no rule that a safety-critical checkpoint must be re-probed live.
 
-- corrupt state throws an instruction to delete the state file manually;
-- state writes are direct, not explicitly temp-file + atomic replace;
-- `pending_reboot` is only a boolean and does not say *why* the checkpoint exists;
-- no probe snapshot or classifier version is stored;
-- a stale checkpoint has no explicit compatibility/version policy;
-- the planned-pause contract is Docker-install-specific rather than a general recoverable-blocker contract.
+The new preflight must treat persisted state as a **resume hint and audit record,
+never as proof that the machine is currently ready**.
 
-## 3. Friend Beta observed failure
+## 3. Friend Beta evidence
 
-The clean-machine test sequence was:
+The observed clean-machine sequence was:
 
 ```text
 Python setup
--> model scout / model recommendation
--> Docker Desktop installation
+-> model scout / qwen3.5:4b-16k recommendation
+-> Docker Desktop install
 -> Docker reports virtualization support unavailable
--> user-facing install cannot proceed
 ```
 
-This proves a product UX failure, not a Docker crash or a completed AFK AI fix.
+This evidence proves only that the blocker was discovered too late. It does not,
+by itself, prove which layer was at fault. Possible causes include firmware
+virtualization disabled, missing Windows virtualization components, the Windows
+hypervisor not launching at boot, WSL being absent/outdated/unhealthy, Docker
+requiring a reboot, or another Docker Desktop startup failure.
 
-The design must not assume the exact cause on that machine. The correct first split is between firmware virtualization, Windows virtualization/WSL readiness, reboot state, Docker installation/running state, and an unknown blocker.
+The classifier must therefore prefer measured state over guessing from one Docker
+error string.
 
-## 4. Proposed state model
+## 4. Platform facts and supported-path policy
 
-Do not force every signal into one flat enum. Store **component status** plus one derived `overall` disposition. That preserves evidence and avoids treating `DOCKER_HEALTHY` and `READY` as competing meanings.
+The implementation should be based on these current platform facts:
 
-### Component statuses
+- `Win32_Processor.VirtualizationFirmwareEnabled` is a Windows-visible signal for
+  whether firmware enabled CPU virtualization extensions. A missing/null/error
+  result is **UNKNOWN**, not proof that firmware virtualization is disabled.
+- `Win32_ComputerSystem.HypervisorPresent` is a distinct Windows-visible signal
+  that a hypervisor is currently present. It must not be collapsed into the
+  firmware signal.
+- WSL 2 requires Windows virtualization support, including Virtual Machine
+  Platform; Windows feature changes can require a reboot.
+- current Docker Desktop documentation requires WSL 2.1.5 or later **when using
+  the WSL 2 backend**.
+- Docker Desktop on Windows also supports Hyper-V and Docker VMM in applicable
+  configurations. Therefore `WSL_NOT_INSTALLED` is **not automatically a blocker
+  when a verified local Docker Desktop Linux engine is already healthy through a
+  different backend**.
+- Docker's troubleshooting documentation explicitly distinguishes firmware
+  virtualization from a hypervisor that is installed but not launched at Windows
+  startup.
+- Docker Desktop does not require Docker Hub sign-in by default. AFK AI must not
+  make sign-in an installation requirement.
+- Docker CLI contexts can target local or remote daemons, and `DOCKER_HOST` /
+  `DOCKER_CONTEXT` can override the selected endpoint. A successful `docker info`
+  against a remote daemon is **not** proof that the local AFK AI environment is
+  ready.
+
+For a new Docker Desktop installation, AFK AI's Friend Beta recovery path should
+prefer the normal WSL 2 backend because that is Docker Desktop's default Windows
+path today. This is a **project path choice**, not a claim that Docker Desktop
+universally requires WSL 2.
+
+Authoritative references:
+
+- Microsoft Win32_Processor:
+  https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-processor
+- Microsoft Win32_ComputerSystem:
+  https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-computersystem
+- Microsoft WSL commands:
+  https://learn.microsoft.com/en-us/windows/wsl/basic-commands
+- Microsoft WSL installation:
+  https://learn.microsoft.com/en-us/windows/wsl/install
+- Docker Desktop Windows requirements:
+  https://docs.docker.com/desktop/setup/install/windows-install/
+- Docker Desktop WSL backend:
+  https://docs.docker.com/desktop/features/wsl/
+- Docker virtualization troubleshooting:
+  https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/topics/
+- Docker contexts:
+  https://docs.docker.com/engine/manage-resources/contexts/
+
+## 5. State model
+
+Do not use one flat enum for everything. Preserve component evidence and derive a
+single aggregate disposition.
+
+### 5.1 Platform support
 
 ```text
-firmware_virtualization:
-  READY
-  FIRMWARE_VIRTUALIZATION_DISABLED
-  UNKNOWN
-
-windows_virtualization:
-  READY
-  WINDOWS_VIRTUALIZATION_FEATURE_MISSING
-  REBOOT_REQUIRED
-  UNKNOWN
-
-wsl:
-  READY
-  WSL_NOT_INSTALLED
-  WSL_UPDATE_REQUIRED
-  REBOOT_REQUIRED
-  UNKNOWN
-
-docker:
-  DOCKER_NOT_INSTALLED
-  DOCKER_INSTALLED_NOT_RUNNING
-  DOCKER_REQUIRES_REBOOT
-  DOCKER_HEALTHY
-  UNKNOWN
+SUPPORTED
+UNSUPPORTED_PLATFORM
+UNKNOWN
 ```
 
-### Derived overall state
+Friend Beta currently targets Windows 11. A machine known to be outside the
+published target is not an `UNKNOWN_BLOCKER`; it is `UNSUPPORTED_PLATFORM`.
+
+### 5.2 Firmware virtualization
 
 ```text
 READY
-RECOVERABLE_BLOCKER
-UNKNOWN_BLOCKER
+FIRMWARE_VIRTUALIZATION_DISABLED
+UNKNOWN
 ```
 
-`READY` means all prerequisites required for AFK AI's current Docker/WSL path have been positively revalidated and Docker is healthy.
-
-`RECOVERABLE_BLOCKER` means the classifier has a supported, specific next action.
-
-`UNKNOWN_BLOCKER` means evidence is conflicting, unavailable, timed out, privilege-blocked, localized beyond safe interpretation, or otherwise insufficient. Unknown must fail closed **before model pulls** and surface useful diagnostics rather than invent a fix.
-
-### Blocker precedence
-
-When several problems exist, show one action in this order:
-
-1. `FIRMWARE_VIRTUALIZATION_DISABLED`
-2. `REBOOT_REQUIRED`
-3. `WINDOWS_VIRTUALIZATION_FEATURE_MISSING`
-4. `WSL_NOT_INSTALLED`
-5. `WSL_UPDATE_REQUIRED`
-6. `DOCKER_NOT_INSTALLED`
-7. `DOCKER_INSTALLED_NOT_RUNNING`
-8. `DOCKER_REQUIRES_REBOOT`
-9. `UNKNOWN_BLOCKER`
-10. `DOCKER_HEALTHY` / `READY`
-
-Rationale: do not ask the user to repair a higher layer while a lower platform prerequisite is known to be false.
-
-## 5. Probe result contract
-
-Use one structured object, never downstream parsing of already-rendered user copy.
-
-Suggested shape:
-
-```json
-{
-  "schema_version": 1,
-  "classifier_version": "windows-preflight-v1",
-  "observed_at_utc": "2026-08-28T00:00:00Z",
-  "firmware_virtualization": {
-    "status": "READY",
-    "source": "Win32_Processor.VirtualizationFirmwareEnabled",
-    "evidence": {"virtualization_firmware_enabled": true}
-  },
-  "windows_virtualization": {
-    "status": "READY",
-    "evidence": {
-      "hypervisor_present": true,
-      "virtual_machine_platform": "enabled",
-      "wsl_optional_component": "enabled"
-    }
-  },
-  "wsl": {
-    "status": "READY",
-    "version": "2.x.x",
-    "minimum_for_docker": "2.1.5"
-  },
-  "docker": {
-    "status": "DOCKER_HEALTHY",
-    "cli_found": true,
-    "engine_reachable": true
-  },
-  "reboot": {
-    "required": false,
-    "reasons": []
-  },
-  "overall": "READY",
-  "action": null,
-  "diagnostic_codes": []
-}
-```
-
-Do not persist full command output by default. Persist bounded booleans, versions, exit/status codes, and short AFK-defined diagnostic codes.
-
-## 6. Platform probes / commands
-
-The first implementation should use built-in Windows/CIM/CLI surfaces already available before Python package setup.
-
-### Firmware virtualization
-
-Primary probe:
+Primary signal:
 
 ```powershell
-Get-CimInstance Win32_Processor
+Get-CimInstance Win32_Processor | Select-Object VirtualizationFirmwareEnabled
 ```
 
-Relevant properties:
+Rules:
 
-- `VirtualizationFirmwareEnabled`
-- `VMMonitorModeExtensions`
-- `SecondLevelAddressTranslationExtensions` where available/relevant
+- any reliable `True` from the relevant processor set -> READY;
+- reliable `False` -> FIRMWARE_VIRTUALIZATION_DISABLED;
+- null, unsupported property, access failure, malformed result, or probe timeout
+  -> UNKNOWN.
 
-Microsoft documents `VirtualizationFirmwareEnabled` as the firmware virtualization-extension signal on supported Windows versions.
+Do not parse localized Task Manager or `systeminfo` prose as the primary signal.
 
-Cross-check:
+### 5.3 Windows virtualization/hypervisor layer
 
-```powershell
-Get-CimInstance Win32_ComputerSystem
+```text
+READY
+WINDOWS_VIRTUALIZATION_FEATURE_MISSING
+WINDOWS_HYPERVISOR_NOT_RUNNING
+WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED
+UNKNOWN
 ```
 
-Use `HypervisorPresent` as corroborating evidence that a hypervisor is active, not as a substitute for every firmware/feature check.
+This layer must distinguish:
 
-Do not parse Task Manager UI. `systeminfo.exe` may be a bounded fallback/corroborator, but its human-readable text is localized; do not make English substring parsing the primary classifier.
+1. optional features/components required for the chosen backend;
+2. the hypervisor being launchable/present now;
+3. a known pending-reboot condition.
 
-### WSL
+`WINDOWS_HYPERVISOR_NOT_RUNNING` is intentionally separate from both firmware
+virtualization and missing Windows features. Docker documents the case where the
+hypervisor is installed but disabled at Windows startup. The first implementation
+may **diagnose** that condition; it must not silently edit BCD or otherwise change
+boot configuration.
 
-Probe command availability, then bounded calls:
+Useful evidence includes:
+
+- `Win32_ComputerSystem.HypervisorPresent`;
+- optional feature states for `VirtualMachinePlatform` and
+  `Microsoft-Windows-Subsystem-Linux` when the WSL 2 path is relevant;
+- bounded, read-only boot-configuration evidence if needed to distinguish an
+  installed-but-not-launched hypervisor;
+- pending-reboot evidence only when it can be tied to a relevant Windows/Docker
+  transition.
+
+If privilege prevents a read-only probe, return UNKNOWN unless a documented
+non-elevated fallback exists. Do not silently elevate the whole installer.
+
+### 5.4 WSL
+
+```text
+READY
+NOT_REQUIRED_FOR_CURRENT_HEALTHY_BACKEND
+WSL_NOT_INSTALLED
+WSL_UPDATE_REQUIRED
+WSL_UNHEALTHY
+WSL_REBOOT_REQUIRED
+UNKNOWN
+```
+
+Probe with bounded calls to documented commands such as:
 
 ```text
 wsl.exe --version
@@ -248,413 +269,576 @@ wsl.exe --status
 wsl.exe --list --verbose
 ```
 
-Microsoft documents `--version`, `--status`, `--update`, and `--list --verbose`. Older inbox WSL builds may not support the same version-reporting surface, so unsupported options must classify deliberately rather than become a generic exception.
+Rules:
 
-Current Docker documentation requires WSL 2.1.5 or later for its WSL 2 backend. Store the minimum in one constant with a source comment; do not scatter it across user copy and tests.
+- do not require a normal user Linux distribution merely to satisfy Docker
+  Desktop; Docker documents that its WSL backend does not require one;
+- do not depend on English labels in CLI output;
+- use exit status and machine-readable/locale-independent numeric extraction where
+  possible;
+- if `wsl --version` is unsupported, distinguish an older/inbox WSL path from a
+  missing command instead of treating all failures as `WSL_NOT_INSTALLED`;
+- a command timeout is `WSL_UNHEALTHY` or UNKNOWN depending on the evidence, not a
+  success;
+- WSL below Docker's current documented minimum of 2.1.5 on the WSL backend is
+  `WSL_UPDATE_REQUIRED`;
+- if a verified local Docker Desktop Linux engine is already healthy on a backend
+  that does not require WSL, WSL absence must not override that health result.
 
-Do **not** require an ordinary Linux distribution to be installed merely to satisfy Docker Desktop. Docker documents that its WSL 2 backend does not require a particular user distribution.
-
-### Windows optional features
-
-The current AFK AI Docker path relies on WSL 2. Detect at least:
-
-- Windows Subsystem for Linux feature/readiness;
-- Virtual Machine Platform feature/readiness;
-- hypervisor boot/readiness where evidence indicates the feature exists but the hypervisor is not active.
-
-Candidate built-in probes include PowerShell optional-feature/DISM surfaces. The implementation must determine which query works reliably without forcing the *entire installer* to run elevated. If a query is privilege-blocked, classify that observation as unknown and provide a bounded diagnostic code rather than silently escalating.
-
-Do not enable Windows features in the initial probe function. Probe and action are separate capabilities.
-
-### Docker
-
-Presence is not health.
-
-Probe in layers:
-
-1. resolve `docker.exe` (PATH plus the existing post-install PATH refresh rules);
-2. optionally resolve the Docker Desktop application path/process for user-facing launch guidance;
-3. run a bounded engine query such as `docker info` with a short timeout;
-4. classify engine success as `DOCKER_HEALTHY`;
-5. classify installed CLI + unreachable engine as `DOCKER_INSTALLED_NOT_RUNNING`, `DOCKER_REQUIRES_REBOOT`, or `UNKNOWN` based on the lower-level Windows/WSL evidence.
-
-Do not scrape large Docker diagnostic bundles during normal preflight.
-
-AFK AI must not require Docker Hub sign-in. A local Docker Desktop engine health check is sufficient.
-
-### Reboot evidence
-
-Persist a reboot reason whenever AFK AI itself initiates or observes an operation known to require a restart. The implementation may also inspect conservative Windows pending-reboot indicators, but should avoid treating every vendor-specific registry key as authoritative.
-
-At minimum distinguish:
-
-- AFK AI just enabled/installed a prerequisite whose completion requires reboot;
-- Docker/WSL operation explicitly reports reboot required;
-- a stale `pending_reboot` checkpoint whose machine has since been revalidated healthy.
-
-## 7. Recommended insertion points
-
-The goal is early diagnosis **and** a hard guard before any model download.
-
-### A. Early platform preflight
-
-Add a new first installer phase before the current `vet` phase:
+### 5.5 Docker
 
 ```text
-environment-preflight
-vet
-intent
-python
-pip
-scout
-...
+DOCKER_NOT_INSTALLED
+DOCKER_CLI_MISSING
+DOCKER_INSTALLED_NOT_RUNNING
+DOCKER_STARTING
+DOCKER_REQUIRES_REBOOT
+DOCKER_CONTEXT_REMOTE
+DOCKER_LINUX_ENGINE_REQUIRED
+DOCKER_VERSION_UNSUPPORTED
+DOCKER_HEALTHY_LOCAL
+UNKNOWN
 ```
 
-This phase should be non-destructive by default. It gathers/classifies platform readiness before Python/package/model-selection work is performed.
+`DOCKER_HEALTHY_LOCAL` requires more than `docker.exe` existing.
 
-For a known blocker it writes the checkpoint, renders one action, and exits intentionally through the generalized recoverable-blocker contract.
+Minimum evidence:
 
-### B. Split environment recovery from Ollama setup
+1. Docker Desktop installation/CLI presence is consistent with the expected local
+   product path.
+2. Resolve the effective Docker target, including `DOCKER_HOST`, `DOCKER_CONTEXT`,
+   `docker context show`, and `docker context inspect`.
+3. Reject a TCP/SSH/other remote endpoint as `DOCKER_CONTEXT_REMOTE` for installer
+   readiness. Do not run AFK AI compose operations against it.
+4. Run bounded `docker info` against the intended local endpoint.
+5. Confirm the reachable engine is suitable for the Linux-container compose stack.
 
-The current `ollama-docker` phase combines unrelated responsibilities. During implementation, split only as much as required to make the state machine explicit:
+Do **not** hard-code one context name as truth. Docker context names can vary;
+validate endpoint locality and engine characteristics instead.
+
+`DOCKER_VERSION_UNSUPPORTED` should only be used if AFK AI defines a documented
+minimum Docker Desktop/Engine version for a required feature. Do not invent a
+minimum merely to populate this state.
+
+A Docker Desktop process that exists while `docker info` is still failing is
+`DOCKER_STARTING` for a bounded grace period, then
+`DOCKER_INSTALLED_NOT_RUNNING`/UNKNOWN based on evidence.
+
+No Docker Hub login is part of the readiness contract.
+
+### 5.6 Aggregate disposition
 
 ```text
-environment-preflight
-[environment-recovery / Docker install if appropriate]
-environment-ready-gate
-vet
-intent
-python
-pip
-scout
-ollama-setup
-pulls
-compose
-...
+READY
+RECOVERABLE_BLOCKER
+UNSUPPORTED_PLATFORM
+UNKNOWN_BLOCKER
 ```
 
-The smallest acceptable implementation may keep existing phase names internally, but **there must be a positively revalidated environment-ready gate before `pulls`**.
+Precedence:
 
-### C. No model download before readiness
+1. a verified `DOCKER_HEALTHY_LOCAL` Linux engine can establish READY even if an
+   unused backend-specific probe (for example WSL on a healthy Hyper-V setup) is
+   unavailable;
+2. known unsupported Friend Beta platform -> UNSUPPORTED_PLATFORM;
+3. contradictory or insufficient safety-critical evidence -> UNKNOWN_BLOCKER;
+4. one or more known actionable blockers -> RECOVERABLE_BLOCKER;
+5. otherwise -> READY.
 
-`Invoke-PhasePulls` must be unreachable unless the current-run environment probe says `READY` / `DOCKER_HEALTHY`. Do not trust only a historical phase marker for this gate because the machine can change between runs.
+Do not make every component independently mandatory when observed local engine
+health proves that component is not part of the active backend.
 
-## 8. Resume / checkpoint strategy
+## 6. Probe contract
 
-Evolve `installer-state.json` rather than inventing a second unrelated persistence file.
+Implement probes as read-only functions returning structured evidence. Example:
 
-Suggested schema additions:
+```powershell
+[pscustomobject]@{
+  Firmware = [pscustomobject]@{
+    Status = 'READY'
+    Source = 'Win32_Processor.VirtualizationFirmwareEnabled'
+  }
+  WindowsVirtualization = [pscustomobject]@{
+    Status = 'READY'
+    HypervisorPresent = $true
+  }
+  Wsl = [pscustomobject]@{
+    Status = 'READY'
+    Version = '2.6.1'
+  }
+  Docker = [pscustomobject]@{
+    Status = 'DOCKER_HEALTHY_LOCAL'
+    Context = 'desktop-linux'
+    EndpointKind = 'npipe'
+    EngineOs = 'linux'
+  }
+  Overall = 'READY'
+  Action = $null
+  Code = 'PREFLIGHT-READY'
+}
+```
+
+Requirements:
+
+- explicit command timeouts;
+- no network access required for the probe itself;
+- no model download;
+- no Docker sign-in;
+- no automatic BIOS, BCD, Windows-feature, WSL-update, or service mutation inside
+  the read-only probe layer;
+- no dependency on English CLI prose;
+- bounded captured output;
+- stable machine-readable reason codes;
+- probe exceptions caught and mapped to UNKNOWN evidence rather than leaking into
+  a generic outer failure.
+
+## 7. Exact insertion and control-flow change
+
+The safe future flow is:
+
+```text
+bootstrap (fetch verified payload, ensure PowerShell 7)
+-> environment-preflight          # new, read-only, live
+-> environment-recovery/prepare   # bounded existing/new action if approved
+-> environment-ready              # new, live gate
+-> vet
+-> intent
+-> python
+-> pip
+-> scout
+-> ollama setup
+-> pulls
+-> compose
+-> seed
+-> secure
+-> self-test
+```
+
+The important invariant is stronger than the original design:
+
+> **No model pull and no product-specific package/model work begins until a live
+> environment-ready gate has proved a local usable Docker path or the bounded
+> setup action has completed and been revalidated.**
+
+For the first implementation unit, it is acceptable for known Windows/WSL
+recovery to remain instruction-only. Existing Docker installation behaviour may
+be moved earlier so a missing Docker Desktop is discovered/prepared before Python
+and model work.
+
+Even after a phase is recorded complete, `environment-ready` is never skipped on
+resume.
+
+## 8. Resume/checkpoint strategy
+
+Evolve the state to a versioned schema, for example:
 
 ```json
 {
   "version": 2,
-  "checkpoint": {
-    "kind": "RECOVERABLE_BLOCKER",
-    "reason": "FIRMWARE_VIRTUALIZATION_DISABLED",
-    "created_at_utc": "...",
-    "classifier_version": "windows-preflight-v1"
+  "phases_done": [],
+  "hardware": null,
+  "intent": [],
+  "models": {},
+  "preflight": {
+    "classifier_version": 1,
+    "overall": "RECOVERABLE_BLOCKER",
+    "reason": "WINDOWS_HYPERVISOR_NOT_RUNNING",
+    "action": "restart-after-hypervisor-recovery",
+    "observed_at": "2026-08-28T16:00:00Z"
   },
-  "environment": {
-    "last_probe": {"...": "bounded structured state"}
+  "pending_reboot": {
+    "required": true,
+    "reason": "windows-hypervisor-recovery"
   }
 }
 ```
 
 Rules:
 
-- every rerun re-probes live machine state; never trust a previous `READY` result for system readiness;
-- phase completion may still skip deterministic product work, but environment readiness is a live gate;
-- a resolved blocker clears/replaces the checkpoint automatically;
-- a stale checkpoint is harmless because live revalidation wins;
-- a corrupt state file should be quarantined/renamed with an AFK-generated suffix and a fresh schema created where safe, rather than telling a novice to manually delete JSON;
-- state writes should use a temp file followed by replace/rename so interruption does not leave half-written JSON;
-- schema migration must be explicit and tested; unknown future schema versions fail safely with an actionable message.
+- v1 imports conservatively and migrates in memory;
+- unknown future schema version fails closed with a stable compatibility message;
+- corrupt state is quarantined, not silently trusted and not left requiring the
+  user to guess which file to delete;
+- old state can help resume product choices, but **never** bypasses live preflight;
+- timestamps are audit metadata only. Do not decide readiness from clock age, so a
+  system-clock change cannot make a stale checkpoint authoritative;
+- a reboot can occur safely after a checkpoint because the next run always
+  re-probes before continuing;
+- a state change between runs is expected and should replace the old blocker with
+  the new measured state.
 
-## 9. Exit/result contract and error rendering
+### Atomic write contract
 
-Do not overload generic exit code `1` for every expected machine state.
+Do not continue using direct overwrite for safety-critical state.
 
-Recommended logical outcomes:
+1. serialize to a uniquely named temporary file in the same directory;
+2. close/flush it;
+3. parse the temporary JSON back to verify it is complete;
+4. atomically replace the target on the same volume, retaining at most one bounded
+   backup if useful;
+5. ignore/quarantine abandoned temporary files from an interrupted previous run;
+6. never leave a half-written target as the only copy.
+
+Tests should simulate interruption before and during replacement.
+
+## 9. Action-required exit contract
+
+Generalize the existing exit-code-10 checkpoint into a stable action-required
+contract.
+
+Example reason codes:
 
 ```text
-0   completed / ready path
-10  recoverable action required; checkpoint saved
-1   genuine unexpected failure
+PREFLIGHT-FIRMWARE-VIRT-DISABLED
+PREFLIGHT-WINDOWS-FEATURE-MISSING
+PREFLIGHT-HYPERVISOR-NOT-RUNNING
+PREFLIGHT-WSL-NOT-INSTALLED
+PREFLIGHT-WSL-UPDATE-REQUIRED
+PREFLIGHT-DOCKER-NOT-INSTALLED
+PREFLIGHT-DOCKER-STARTING
+PREFLIGHT-DOCKER-NOT-RUNNING
+PREFLIGHT-DOCKER-REMOTE-CONTEXT
+PREFLIGHT-DOCKER-REBOOT-REQUIRED
+PREFLIGHT-UNSUPPORTED-PLATFORM
+PREFLIGHT-UNKNOWN
 ```
 
-The internal result should carry a stable AFK diagnostic code and user copy. Exit `10` can remain the outer `.cmd` planned-pause code so the existing distribution contract does not needlessly change.
+The outer `.cmd` should distinguish a planned action-required exit from a true
+unexpected crash and print the precise action already rendered by the
+orchestrator.
 
-Generalise the current Docker-only `:dockerwait` presentation into an action-required path. The `.cmd` should not invent diagnosis; it should display the already-classified action summary written/returned by the orchestrator.
+Unknown probe failures must still produce a bounded reason code and diagnostic
+hint before the generic wrapper can run.
 
-Unexpected failures must still include a bounded diagnostic code and the location of the privacy-scrubbed support path. Replace the final user experience of bare `Something went wrong` with something equivalent to:
+## 10. UX copy principles and examples
+
+One screen, one blocker, one next action.
+
+Firmware virtualization disabled:
 
 ```text
-AFK AI could not classify this setup problem.
-Code: PREFLIGHT-UNKNOWN
-Nothing further was installed after the readiness gate.
-Copy the diagnostic summary above when asking for help.
+AFK AI cannot continue yet.
+
+Hardware virtualization is disabled in your PC firmware.
+Docker's local Linux environment cannot start until it is enabled.
+
+Next: enable Intel VT-x / AMD-V / SVM in BIOS/UEFI, save, restart Windows,
+then run Install AFK AI.cmd again.
+
+AFK AI will re-check the machine and continue from the saved setup state.
 ```
 
-Do not claim the installer made no changes if earlier bootstrap work actually installed PowerShell or fetched the repository. Scope the copy to the current gate/action.
-
-## 10. UX copy examples
-
-These are examples for implementation tests, not final marketing copy.
-
-### Firmware virtualization disabled
+Windows hypervisor not running:
 
 ```text
-ACTION NEEDED — turn on hardware virtualization
+AFK AI found virtualization enabled in firmware, but the Windows hypervisor is
+not running.
 
-Windows reports that CPU virtualization is disabled in firmware.
-Open your PC's BIOS/UEFI settings and enable Intel VT-x / Intel Virtualization
-Technology or AMD SVM / AMD-V, then start Windows and run AFK AI again.
+Next: use the documented Windows recovery for this state, restart Windows if
+required, then run Install AFK AI.cmd again.
 
-AFK AI saved your setup checkpoint. You do not need to start over.
+AFK AI will re-check before continuing. It will not edit boot configuration
+silently.
 ```
 
-Do not guess a motherboard-specific BIOS path unless the product has verified hardware-specific guidance.
-
-### Windows virtualization feature missing
+WSL update required:
 
 ```text
-ACTION NEEDED — Windows virtualization support is not ready
+AFK AI found WSL, but this Docker WSL path needs a newer WSL version.
 
-Hardware virtualization is available, but the Windows feature required by the
-current WSL 2 path is not enabled.
-
-AFK AI has not changed Windows features in this step.
-Follow the displayed Windows action, restart if requested, then run AFK AI again.
+Next: update WSL using Microsoft's supported update path, then run the installer
+again.
 ```
 
-### WSL update required
+Docker remote context:
 
 ```text
-ACTION NEEDED — update WSL
+AFK AI's Docker command is currently targeting a remote Docker engine.
+The installer will not deploy AFK AI there.
 
-WSL is installed, but its detected version is below the version required by the
-current Docker Desktop WSL 2 backend.
-
-Update WSL, then run AFK AI again. The installer will re-check it before
-continuing.
+Next: switch Docker back to the local Docker Desktop engine or clear the Docker
+context/host override, then run the installer again.
 ```
 
-### Docker installed but not running
+Docker starting:
 
 ```text
-ACTION NEEDED — start Docker Desktop
+Docker Desktop is installed and appears to be starting, but the local engine is
+not healthy yet.
 
-Docker Desktop is installed, but the local Docker engine is not reachable.
-Open Docker Desktop and let it finish starting, then run AFK AI again.
-
-No Docker Hub sign-in is required by AFK AI.
+Next: let Docker Desktop finish starting, then retry. If Docker reports a Windows
+virtualization or WSL error, keep that exact error for diagnostics.
 ```
 
-### Reboot required
+Unknown:
 
 ```text
-ACTION NEEDED — restart Windows
+AFK AI could not prove that the local Windows/Docker environment is ready, so it
+stopped before downloading a model.
 
-A Windows/WSL/Docker prerequisite changed and needs a restart before AFK AI can
-verify the environment.
-
-Restart Windows, then run AFK AI again. Your checkpoint is saved.
+Reason: PREFLIGHT-UNKNOWN
+Copy the bounded diagnostic summary and attach it to an installation report.
 ```
 
 ## 11. Privacy implications
 
-Preflight should collect only machine-readiness facts needed to classify setup:
+Preflight should need only coarse machine state:
 
-- boolean virtualization/hypervisor/feature states;
-- WSL version/status category;
-- Docker installed/running/healthy category;
-- bounded exit codes/AFK diagnostic codes;
-- reboot-required category.
+Allowed persistence:
 
-Do not collect or upload:
+- Friend Beta supported/unsupported OS/build class;
+- booleans/enums for firmware, hypervisor, Windows feature, WSL, Docker state;
+- WSL/Docker version strings where relevant;
+- Docker endpoint **kind/locality**, not remote credentials or full remote URLs;
+- stable reason code;
+- checkpoint timestamp;
+- classifier version.
 
-- usernames/home paths except transiently where Windows APIs require them;
-- WSL distro file contents;
-- Docker container/image inventories unless later diagnostics explicitly need a sanitised subset;
-- Docker account identity;
-- network credentials;
-- environment-variable values;
-- chat/model prompt/document content.
+Do not persist by default:
 
-No telemetry is introduced by this unit. Support diagnostics remain user-initiated.
+- usernames;
+- full filesystem paths;
+- hostnames;
+- Docker registry credentials;
+- Docker context TLS material;
+- remote Docker host addresses;
+- WSL distro filesystem contents;
+- environment-variable values that may contain secrets;
+- chat/model prompts or documents.
 
-## 12. Failure modes and fail-closed rules
+If `DOCKER_HOST`/context evidence is needed, persist only a classification such as
+`local-npipe`, `remote-tcp`, `remote-ssh`, or `unknown`.
+
+## 12. Failure modes and required behaviour
 
 | Failure | Required behaviour |
 |---|---|
-| CIM virtualization property unavailable | corroborate with other bounded Windows evidence; otherwise `UNKNOWN_BLOCKER` |
-| Windows feature query needs elevation | do not silently elevate merely to probe; return a diagnostic code / supported next step |
-| localized CLI output | prefer exit/status/API facts; do not depend on English prose for core state |
-| `wsl.exe` missing | `WSL_NOT_INSTALLED` when evidence is sufficient |
-| WSL option unsupported on older inbox build | classify version/status deliberately; do not crash |
-| WSL command hangs | timeout -> `UNKNOWN_BLOCKER` with command-specific code |
-| Docker CLI missing | `DOCKER_NOT_INSTALLED` |
-| Docker CLI present, engine unreachable | use platform evidence to distinguish stopped/reboot/unknown |
-| Docker health query hangs | timeout -> stopped/unknown based on corroboration, never healthy |
-| state file corrupt | quarantine + fresh safe state, report what happened |
-| state schema newer than code | fail with actionable incompatibility; do not overwrite blindly |
-| machine state changes between runs | live re-probe wins over checkpoint |
-| preflight not ready | no model pull and no compose start |
-| probe throws unexpected exception | bounded `UNKNOWN_BLOCKER`/unexpected diagnostic, never guessed remediation |
+| CIM virtualization property missing | UNKNOWN, never guess disabled |
+| firmware reports enabled but hypervisor absent | classify Windows hypervisor layer; do not rewrite as firmware-disabled |
+| Windows feature query unavailable | UNKNOWN unless another live success proves the active backend works |
+| WSL command missing | distinguish absent WSL from unsupported/unneeded backend |
+| `wsl --version` unsupported | bounded legacy/inbox compatibility path |
+| WSL command hangs | timeout and actionable WSL_UNHEALTHY/UNKNOWN |
+| WSL installed but too old for WSL Docker backend | WSL_UPDATE_REQUIRED |
+| Docker CLI absent | DOCKER_NOT_INSTALLED/DOCKER_CLI_MISSING |
+| Docker Desktop installed but engine stopped | DOCKER_INSTALLED_NOT_RUNNING |
+| Docker process exists but engine not ready | DOCKER_STARTING for bounded grace period |
+| `docker info` succeeds against remote engine | DOCKER_CONTEXT_REMOTE, never READY |
+| local Docker engine is Windows-container mode | DOCKER_LINUX_ENGINE_REQUIRED |
+| Docker says virtualization failed while Windows evidence conflicts | UNKNOWN_BLOCKER with both bounded evidence items |
+| reboot known to be required | checkpoint + planned exit; live re-probe next run |
+| state JSON corrupt | quarantine and rebuild safe state |
+| future state schema | compatibility failure; do not downgrade silently |
+| atomic write interrupted | previous valid state remains usable; temp ignored/quarantined |
+| system clock moves backward/forward | no readiness impact; timestamps informational only |
+| no network | local preflight still runs; later download failure reported separately |
+| probe throws unexpected exception | map to PREFLIGHT-UNKNOWN before outer generic wrapper |
 
 ## 13. RED test matrix
 
-Implement these tests **before** activating new installer control flow.
+Write these tests before runtime control-flow implementation.
 
-| Scenario | Expected classification / behaviour |
+### Pure classifier tests
+
+| Scenario | Expected result |
 |---|---|
-| virtualization enabled + Windows/WSL/Docker healthy | overall `READY`; Docker `DOCKER_HEALTHY`; installer may continue |
-| firmware virtualization disabled | `FIRMWARE_VIRTUALIZATION_DISABLED`; one firmware action; checkpoint saved |
-| virtualization enabled but Windows feature missing | `WINDOWS_VIRTUALIZATION_FEATURE_MISSING`; no Docker/model action yet |
-| WSL absent | `WSL_NOT_INSTALLED`; precise WSL action |
-| WSL installed but below supported Docker minimum | `WSL_UPDATE_REQUIRED`; update action |
-| WSL installed but command unhealthy/timeout | `UNKNOWN_BLOCKER`; useful diagnostic code |
-| Docker absent with lower prerequisites ready | `DOCKER_NOT_INSTALLED`; bounded Docker-install transition allowed |
-| Docker installed but engine not running | `DOCKER_INSTALLED_NOT_RUNNING`; start-Docker action |
-| Docker install/feature operation requires reboot | `DOCKER_REQUIRES_REBOOT` or reboot component status; planned exit |
-| Docker healthy | `DOCKER_HEALTHY`; ready gate passes |
-| state changes between runs | second run ignores stale result and uses live probe |
-| resume after reboot | saved phase work retained; live environment revalidated; continuation automatic when ready |
-| checkpoint stale | stale reason replaced by live state without user cleanup |
-| checkpoint corrupt | quarantined/recovered safely; clear message; no manual JSON surgery required |
-| preflight rerun twice with same machine | idempotent result; no duplicate destructive action |
-| environment not ready before pulls | model-pull function is not invoked |
-| Docker sign-in absent | local engine readiness does not require/account-check Docker Hub sign-in |
-| unknown platform failure | no generic-only `Something went wrong`; stable diagnostic code + support guidance |
-| probe output contains user path/hostname | persisted/support result does not retain unnecessary value |
-| WSL/Docker probe times out | bounded timeout; no hang; fail closed |
-| localized command output | core classifier still uses structured/exit evidence or returns unknown, never false ready |
-| future state schema version | older installer refuses safe overwrite and explains incompatibility |
+| local Docker Linux engine healthy | READY |
+| firmware disabled, Docker not healthy | FIRMWARE_VIRTUALIZATION_DISABLED |
+| firmware enabled + required Windows feature missing | WINDOWS_VIRTUALIZATION_FEATURE_MISSING |
+| firmware enabled + features present + hypervisor not launched | WINDOWS_HYPERVISOR_NOT_RUNNING |
+| Windows feature enabled but reboot pending | WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED |
+| WSL absent on chosen/new-install WSL path | WSL_NOT_INSTALLED |
+| WSL below 2.1.5 on WSL backend | WSL_UPDATE_REQUIRED |
+| WSL command hangs | WSL_UNHEALTHY/UNKNOWN, never READY |
+| healthy local Docker on non-WSL backend, WSL absent | READY with WSL not required |
+| Docker absent | DOCKER_NOT_INSTALLED |
+| Docker installed, stopped | DOCKER_INSTALLED_NOT_RUNNING |
+| Docker process starting, info not yet healthy | DOCKER_STARTING then bounded failure/ready transition |
+| Docker executable exists but engine pipe unavailable | not READY |
+| `docker info` succeeds through remote context | DOCKER_CONTEXT_REMOTE |
+| `DOCKER_HOST` points remote despite local Desktop install | DOCKER_CONTEXT_REMOTE |
+| Docker engine reports Windows containers | DOCKER_LINUX_ENGINE_REQUIRED |
+| Docker healthy locally | DOCKER_HEALTHY_LOCAL |
+| Docker version below an explicitly configured project minimum | DOCKER_VERSION_UNSUPPORTED |
+| no project Docker minimum configured | version alone does not block |
+| firmware UNKNOWN + no stronger health proof | UNKNOWN_BLOCKER |
+| firmware signal conflicts with Docker virtualization error | UNKNOWN_BLOCKER with diagnostic evidence |
+| unsupported Friend Beta OS | UNSUPPORTED_PLATFORM |
+| localized Windows/WSL output | same classification as equivalent English machine |
+| non-admin user, read-only probes available | classification succeeds without elevation |
+| read-only probe access denied | UNKNOWN unless stronger live health evidence exists |
+| expected probe executable missing | stable absent/unknown state, not uncaught exception |
 
-### Test seams
+### Resume/state tests
 
-Do not test this by toggling real firmware/Windows features in the normal unit suite.
+| Scenario | Expected result |
+|---|---|
+| blocker changes between runs | second live probe wins |
+| resume after reboot | re-probe then continue only if ready |
+| stale checkpoint says ready but Docker stopped | stop; stale state never bypasses live gate |
+| corrupt state | quarantine + safe recovery path |
+| future schema version | explicit compatibility failure |
+| interrupted temp write | valid target survives |
+| interruption during replacement | either previous or complete new state, never half JSON |
+| system clock changed | no readiness bypass or false stale decision |
+| repeated rerun after successful recovery | idempotent READY, no repeated recovery action |
+| preflight rerun | idempotent and non-mutating |
 
-Create an injectable probe boundary. Each probe returns a small object; the classifier consumes those objects. Fixture tests should be able to supply:
+### Control-flow tests
 
-```text
-firmware probe result
-windows-feature probe result
-WSL probe result
-Docker probe result
-reboot probe result
-```
+- preflight runs before Python/package/model setup;
+- model-scout network/product work is not entered before environment-ready;
+- model pull function is **never invoked** before environment-ready;
+- Docker installation/recovery checkpoint occurs before model download;
+- no Docker Hub sign-in requirement or sign-in probe exists;
+- no read-only probe silently requests whole-installer elevation;
+- recoverable blocker uses planned action-required exit rather than generic failure;
+- unknown probe exception produces stable reason + bounded diagnostic;
+- no-network machine can complete the local preflight and then fail separately at
+  the first genuinely network-dependent setup step;
+- local Docker context is revalidated immediately before compose/pulls even if a
+  checkpoint says it was previously healthy.
 
-Then separately have a small Windows integration test lane that exercises the real probe commands on a healthy CI/VM without changing machine state.
+### Integration tests without changing the host
 
-At least one test must assert that no function capable of `ollama pull`, Docker compose startup, or model download is called while the environment-ready gate is false.
+Use fixtures/mocks for:
 
-## 14. Toolchain recommendation
+- CIM results;
+- optional feature states;
+- hypervisor present/not-present evidence;
+- `wsl.exe` stdout/stderr/exit/timeout;
+- Docker context/host overrides;
+- `docker info` stdout/stderr/exit/timeout;
+- Docker process/startup state;
+- pending reboot evidence;
+- v1/v2/future/corrupt installer-state JSON.
 
-### Recommendation: PowerShell 7 for the first preflight implementation
+Normal automated tests must not enable Windows features, edit BCD, alter firmware,
+start real Docker/WSL, or reboot the developer machine.
 
-Use the existing PowerShell installer/runtime seam for this unit, with pure/injectable helper functions in `installer/installer-common.ps1` or a focused new `installer/windows-preflight.ps1`.
+## 14. Rollback/fallback
 
-Reasons:
+If the future implementation causes regressions:
 
-1. **Earliest availability.** `bootstrap.ps1` already guarantees PowerShell 7 before it launches the orchestrator. Python is installed later, so a Python-only preflight cannot diagnose the earliest clean-machine blocker without first doing work the preflight is supposed to avoid.
-2. **Windows integration.** CIM, registry, Windows optional-feature queries, process/path resolution, and bounded invocation of `wsl.exe` / `docker.exe` are native PowerShell strengths.
-3. **Packaging.** No new binary/runtime needs to be shipped before the installer can inspect the machine.
-4. **Maintainability.** This keeps platform-changing/Windows-specific installer logic in the existing Windows installer layer rather than duplicating state in a new native helper.
-5. **Testability.** Probe and classification functions can be separated and fed synthetic objects; tests do not need to mutate the host.
+1. revert the preflight implementation commits;
+2. keep this design and tests as the known target;
+3. fall back to current Friend Beta behaviour while preserving existing state;
+4. never migrate state destructively without a version check;
+5. never interpret an unknown/future state file as READY.
 
-### Do not introduce a native helper yet
+The design itself is documentation-only and can be reverted independently.
 
-Rust/C++ would only be justified if Windows APIs unavailable/reliably inaccessible from the existing runtime became a demonstrated blocker. That has not been shown.
+## 15. Likely files for the later implementation
 
-### Do not make Python the only preflight layer
+Primary:
 
-The Python package remains appropriate for reusable product orchestration and pure hardware/model logic after Python exists. If the future Control Center needs the normalized environment state, consider a later shared schema/reader. Do not duplicate the first classifier merely for language symmetry.
+- `installer/Install-LocalAI.ps1`
+- `installer/installer-common.ps1`
+- new focused PowerShell preflight module if separation improves testability
+- new focused preflight/state tests under `tests/`
 
-### PowerShell 5.1 remains bootstrap glue
+Possible small changes:
 
-Keep `bootstrap.ps1` compatible with Windows PowerShell 5.1 for the tiny fetch/PowerShell-7 bootstrap contract. Run the substantive preflight under PowerShell 7 in the orchestrator.
+- `Install Local AI.cmd` for generalized action-required copy;
+- `SUPPORT.md` / installer docs after behaviour is actually implemented.
 
-## 15. Likely files for the implementation unit
+Avoid unrelated edits to model selection, Open WebUI, site deployment, releases,
+or ValClip.
 
-Expected primary changes:
+## 16. Toolchain recommendation
 
-- `installer/Install-LocalAI.ps1` — insert/gate phases and generalized planned-pause handling;
-- `installer/installer-common.ps1` — state schema/migration, atomic save, probe/classifier helpers **or** source a new focused helper;
-- optionally `installer/windows-preflight.ps1` — preferred if helpers become large enough to obscure generic installer utilities;
-- `Install Local AI.cmd` — replace Docker-specific/generic outer messaging with a generalized action-required contract, without moving diagnosis into batch code;
-- `installer/README.md` — update current-flow documentation after implementation;
-- new focused tests under `tests/` for classifier, checkpoint, gating, and outer error contract.
+### Recommendation: PowerShell 7 for the first implementation
 
-Possible secondary changes only if demonstrated necessary:
+Why:
 
-- `src/localai/installer_vet.py` / Python CLI if the normalized environment state becomes useful after installation;
-- diagnostic-report code to include bounded preflight diagnostic codes.
+- the bootstrap already resolves/installs PowerShell 7 before launching the
+  orchestrator;
+- the classifier therefore runs before Python/package setup;
+- PowerShell has direct CIM and Windows feature/process access;
+- bounded `wsl.exe`/`docker.exe` interrogation is natural;
+- current installer/state code is already PowerShell, reducing packaging and
+  handoff risk;
+- pure classifier logic can still be written as deterministic functions fed by
+  mocked probe results.
 
-Do not touch release pins, website download hashes, model selection policy, Docker Compose configuration, or unrelated Control Center features in this unit.
+Keep Windows PowerShell 5.1 limited to the bootstrap compatibility layer.
 
-## 16. Safety constraints / non-goals
+Do **not** introduce a native helper unless a required Windows state cannot be
+reliably observed through supported CIM/PowerShell/CLI surfaces. Do not duplicate
+the authoritative classifier in Python merely because the repository also has a
+Python runtime.
 
-This unit is **not** permission to:
+Important timing qualification: PowerShell 7 is available before the
+**orchestrator** preflight, not before the bootstrap itself. The bootstrap still
+has to fetch/verify the pinned payload and may install PowerShell 7 first.
 
-- run the entire installer elevated;
-- silently change BIOS/UEFI settings;
-- silently enable Windows features just because they are missing;
-- edit BCD/hypervisor boot settings without a separate explicit recovery design;
-- disable Windows security controls;
-- require a Docker Hub account/sign-in;
-- download a model before environment readiness;
-- change model recommendations;
-- change release pins/hashes;
-- replace Docker/WSL architecture;
-- add telemetry;
-- solve cross-platform installation.
+## 17. Safety constraints / non-goals
 
-Initial implementation should prefer **detect -> classify -> explain -> checkpoint -> intentional exit -> revalidate**. System-changing recovery automation can be added only where the action is well-bounded, consented, testable, and genuinely improves the Friend Beta path.
+The next bounded implementation must not:
 
-## 17. Definition of done
+- edit BIOS/UEFI;
+- silently edit BCD/hypervisor boot settings;
+- automatically enable/disable Windows features without a separately reviewed,
+  explicit recovery action;
+- weaken Defender, Smart App Control, antivirus, UAC, or execution policy
+  globally;
+- require Docker Hub sign-in;
+- trust a remote Docker context;
+- download a model before the live readiness gate;
+- run the whole installer elevated;
+- touch ValClip, Ollama production jobs, GPU workloads, release pins, deployment,
+  analytics, billing, licensing implementation, or unrelated runtime features.
 
-The implementation unit is done when:
+## 18. Definition of done for the later runtime unit
 
-1. the RED matrix above is implemented and passes for the supported classifier paths;
-2. clean-machine execution classifies virtualization/Windows/WSL/Docker before model downloads;
-3. firmware-disabled, feature-missing, WSL-absent/update, Docker-absent/stopped, reboot, healthy, and unknown states have distinct stable diagnostics;
-4. one precise user action is shown for each known recoverable blocker;
-5. recoverable blockers use a planned checkpoint/exit, not a generic failure;
-6. rerun after a fix/reboot automatically revalidates and resumes without manual state deletion;
-7. stale/corrupt state is handled safely and tested;
-8. no model pull/compose start occurs before a live ready gate;
-9. no Docker Hub sign-in requirement is introduced;
-10. diagnostics remain bounded/privacy-safe;
-11. existing pinned-bootstrap/release integrity behaviour is unchanged;
-12. documentation is updated only after the behaviour exists;
-13. cheap focused and repository test gates pass;
-14. a new clean-machine Friend Beta run reaches the next meaningful milestone or produces a precise new blocker.
+Implementation is complete only when:
 
-## 18. Implementation brief for Claude/Codex
+- all RED tests above pass;
+- a healthy local Docker environment proceeds without unnecessary WSL blocking;
+- firmware-disabled is distinguished from hypervisor-not-running;
+- missing Windows feature, WSL absent/outdated/unhealthy, Docker absent/stopped/
+  starting/reboot-needed, remote Docker context, wrong engine mode, and unknown
+  blocker each produce an appropriate state;
+- every external probe has a timeout;
+- locale does not change classification;
+- a non-admin user can run read-only probes without whole-installer elevation;
+- no model download begins before environment readiness;
+- persisted state is versioned and atomically replaced;
+- stale/corrupt/future checkpoints cannot create false readiness;
+- after a fix/reboot, rerunning recognizes prior product progress but revalidates
+  the environment and continues automatically;
+- Docker sign-in is never required by AFK AI;
+- unknown failures produce a useful reason code/diagnostic instead of only
+  `Something went wrong`.
 
-**Title:** Add virtualization / Docker / WSL preflight and resumable recovery
+## 19. First implementation brief for Claude/Codex
 
-**Problem:** The current installer checks only Docker CLI presence late in the phase order. A clean-machine run reached Docker before discovering an unavailable virtualization path, while the outer batch file rendered unexpected failures generically.
+After this design is approved and AFK AI becomes the active engineering lane:
 
-**Implement:** a non-destructive Windows readiness probe/classifier, persistent reasoned checkpoint, early blocker UX, live ready gate before model pulls, and generalized planned-pause/error rendering. Reuse the existing installer state/phase architecture; do not redesign unrelated runtime.
+1. write RED classifier/state/control-flow tests first;
+2. implement pure PowerShell 7 probe/classifier seams using injected command/CIM
+   results in tests;
+3. add local Docker-context validation so remote `DOCKER_HOST`/context success
+   cannot produce READY;
+4. distinguish firmware virtualization, Windows feature state, and hypervisor
+   launch state;
+5. make WSL blocking conditional on the active/new-install backend rather than a
+   universal Docker requirement;
+6. migrate v1 installer state conservatively and replace direct state writes with
+   the atomic contract;
+7. add `environment-preflight` and `environment-ready` before product-specific
+   setup/model work;
+8. generalize the planned action-required exit while preserving existing exit
+   semantics where possible;
+9. run only cheap synthetic tests first, then a separately approved clean-machine
+   replay;
+10. stop before unrelated refactors or platform expansion.
 
-**Start RED:** implement the test matrix in section 13 with synthetic probe fixtures. First prove that the current flow can reach the model-pull boundary with `docker.exe` present but an unhealthy engine; then make that regression impossible.
+The first real-machine proof target is:
 
-**Non-goals:** model/runtime changes, Docker/WSL execution during unit tests, broad refactors, release changes, telemetry, cross-platform support, auto-editing BIOS, permanent security weakening.
-
-**Likely first code seam:** a new `installer/windows-preflight.ps1` containing bounded probes + a pure classifier, sourced by `Install-LocalAI.ps1`, with state/checkpoint helpers kept in `installer-common.ps1`.
-
-**Acceptance:** all supported blocker states are distinguishable; live readiness gates model pulls; checkpoint survives reboot/rerun; unknown failures are actionable; no existing release-integrity or privacy boundary regresses.
-
-## 19. External platform references used for this design
-
-- Microsoft WSL basic commands: https://learn.microsoft.com/windows/wsl/basic-commands
-- Microsoft WSL install/update guidance: https://learn.microsoft.com/windows/wsl/install
-- Microsoft `Win32_Processor` class (`VirtualizationFirmwareEnabled`): https://learn.microsoft.com/windows/win32/cimwin32prov/win32-processor
-- Microsoft `Win32_ComputerSystem` class (`HypervisorPresent`): https://learn.microsoft.com/windows/win32/cimwin32prov/win32-computersystem
-- Docker Desktop Windows install/system requirements: https://docs.docker.com/desktop/setup/install/windows-install/
-- Docker Desktop WSL 2 backend: https://docs.docker.com/desktop/features/wsl/
-- Docker Desktop virtualization troubleshooting: https://docs.docker.com/desktop/troubleshoot-and-support/troubleshoot/topics/
-
-These references inform probe selection and requirements; runtime truth and measured Friend Beta behaviour still outrank documentation assumptions during implementation.
+> A machine whose `docker.exe` exists but whose **local** Docker Desktop Linux
+> engine cannot run because of virtualization/Windows/WSL state must stop before
+> Python/model downloads with one correct action. After the blocker is fixed or a
+> required reboot occurs, rerunning must re-probe the live machine and continue
+> without trusting the old checkpoint. A remote Docker context must never satisfy
+> that gate.
