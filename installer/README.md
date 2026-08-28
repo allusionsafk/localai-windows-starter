@@ -1,40 +1,103 @@
-# localai Friend Bootstrapper
+# AFK AI Friend Bootstrapper
 
-A guided, mostly-automatic setup that stands up a **secure, loopback-only** localai
-stack on a clean-ish Windows machine — matched to the box's hardware and to what
-the user actually wants it for.
+A guided, mostly-automatic setup for the current Windows Friend Beta. It stands
+up the local AFK AI stack on a clean-ish Windows machine, matched to the box's
+hardware and to what the user wants it for.
 
 Entry points: `bootstrap.ps1` (tiny pinned stub that fetches a verified copy of
 the repo, ensures PowerShell 7, and hands off) and `Install-LocalAI.ps1` (the
-phase orchestrator — resumable via `-Resume`, previewable via `-DryRun`). The
-root `README.md` covers how a user runs them.
+phase orchestrator — resumable through persisted phase state and explicitly via
+`-Resume`, previewable via `-DryRun`). The root `README.md` covers how a user
+runs them.
 
-## What it does
+## Current flow
 
-1. **Vets the system** — GPU/VRAM, CPU, RAM, free disk, Docker presence — and maps
-   it to a capability **tier** (S/A/B/C/CPU) that bounds how large a model can run.
-2. **Asks intent** — chat / coding / web browsing / voice — with sane defaults.
-3. **Chooses models** — runs the scout filtered to the tier's VRAM budget and the
-   chosen intent, shows the picks and honest tradeoffs, and lets the user confirm.
-4. **Installs components** — Ollama, Docker Desktop (detect-first), the chosen
-   models + Modelfiles, brings up the compose stack, and seeds the Open WebUI DB.
-5. **Secures by default** — loopback-only binds, the physical-adapter firewall
-   block, the WinNAT port-3000 fix. **No LAN/remote exposure unless explicitly
-   opted in.**
-6. **Self-tests + hands off** — gates on `localai health`, then prints URLs and how
-   to start/stop/change models.
+The orchestrator currently runs:
 
-## What it NEVER does (the security contract)
+```text
+vet
+intent
+python
+pip
+scout
+ollama-docker
+pulls
+compose
+seed
+secure
+self-test
+```
 
-- **Never exposes services to the network** without an explicit, separate opt-in.
-  Every bind is `127.0.0.1` by default; the firewall block rule guards the one
-  `0.0.0.0` bind (Ollama) that Docker needs.
-- **Never registers autostart** — no scheduled tasks, no Docker restart policies,
-  no auto-launch. Starting the stack is always a manual choice.
-- **Never creates your Open WebUI account** — the first browser signup becomes
-  admin; the installer only prints that instruction.
-- **Never runs the whole thing elevated** — only the firewall/WinNAT steps
-  self-elevate; everything else runs as your normal user.
+What those phases do today:
+
+1. **Vets capability** — GPU/VRAM, CPU, RAM, and free disk, then maps the machine
+   to a capability **tier** (S/A/B/C/CPU) that bounds model size/context.
+2. **Asks intent** — chat / coding / web browsing / voice, with sane defaults.
+3. **Installs Python support** — Python 3.12 and the editable `localai` package
+   where needed.
+4. **Chooses models** — runs the scout against the vetted VRAM budget and stores
+   the tier pick.
+5. **Installs Ollama / checks Docker CLI presence** — installs Docker Desktop
+   when `docker.exe` is absent, then uses a planned resume checkpoint so Docker
+   can complete its own first-launch/reboot work.
+6. **Pulls/builds the selected model**, brings up the compose stack, and seeds
+   the Open WebUI DB.
+7. **Applies network guardrails** — loopback-focused Docker publishes, the
+   physical-adapter firewall block, and the WinNAT port-3000 check/fix guidance.
+8. **Self-tests + hands off** — gates on `localai health`, then prints URLs and
+   start/stop/model guidance.
+
+### Known Friend Beta preflight gap
+
+The current `vet` phase does **not** yet classify firmware virtualization,
+Windows virtualization features, WSL readiness, or Docker-engine health. The
+`ollama-docker` phase primarily checks whether `docker.exe` exists. That means a
+clean-machine run can reach Docker Desktop before Windows exposes the real
+virtualization/WSL blocker, and an installed-but-unhealthy Docker engine is not
+identified early enough.
+
+This is a known limitation, not a completed fix. A separate implementation-ready
+design is under review in starter PR #3:
+
+https://github.com/allusionsafk/localai-windows-starter/pull/3
+
+That future unit will add early classification, precise recoverable actions, a
+live readiness gate before model pulls, and resumable revalidation after a fix
+or reboot.
+
+## Current persistence / resume behaviour
+
+`installer-state.json` records completed phase names plus current hardware,
+intent, model selection, and a `pending_reboot` flag. The runner skips completed
+phases on a rerun, which lets the normal double-click path continue work after a
+planned Docker checkpoint.
+
+The current state schema is intentionally simple and has known UX limitations:
+corrupt state currently asks for manual deletion, and `pending_reboot` does not
+record a reason. The preflight design proposes a versioned, reasoned checkpoint
+with live revalidation and safer state recovery; it is not implemented yet.
+
+## Privacy and security boundary
+
+The installer is designed around these project constraints:
+
+- **Local-network guardrails.** Docker-published UI/search/voice ports use
+  loopback. Ollama deliberately binds to `0.0.0.0:11434` so Docker can reach the
+  native Windows service; the later `secure` phase attempts to block AFK AI ports
+  on physical Wi-Fi/Ethernet adapters. The Ollama socket itself is therefore not
+  a loopback-only bind, and a declined/failed firewall step must not be described
+  as if the guardrail succeeded.
+- **No AFK AI cloud account.** Open WebUI's first local signup becomes the local
+  owner/admin.
+- **No blanket Windows-security workaround.** Do not instruct users to disable
+  Defender, Smart App Control, antivirus, or UAC merely to run the beta.
+- **No whole-installer elevation.** System-level firewall/Windows operations may
+  need a bounded UAC step; the normal installer should not simply run everything
+  as Administrator.
+- **Local-first is not offline-only.** Software/model downloads and explicitly
+  enabled web search use the network.
+
+See the root `SECURITY.md` for vulnerability reporting.
 
 ## Building blocks
 
@@ -42,14 +105,14 @@ The orchestrator drives these; each also works standalone:
 
 | Piece | What it is |
 |---|---|
-| `localai vet [--json]` | Probes hardware → capability tier. `--json` emits one line for the orchestrator. |
+| `localai vet [--json]` | Probes hardware -> capability tier. `--json` emits one line for the orchestrator. |
 | `localai webui-seed --model <id> --num-ctx <n>` | Seeds Open WebUI's SQLite config (per-model `think`/`num_ctx`/`presence_penalty`, defaults). Refuses loudly on an unexpected DB schema. `--dry-run` prints the plan. |
 | `installer/tiers.json` | Single source of truth for tier thresholds + VRAM math, mirrored by the PowerShell vet phase. Its KV/weights/overhead constants are kept in lockstep with `model_scout` by a test. |
 
 ## Capability tiers
 
-Assumes the installer sets `OLLAMA_KV_CACHE_TYPE=q8_0` host-side (halves KV cache),
-so each tier's ceiling model fits its own VRAM at 32k/16k/8k context:
+Assumes the installer sets `OLLAMA_KV_CACHE_TYPE=q8_0` host-side (halves KV
+cache), so each tier's ceiling model fits its own VRAM at 32k/16k/8k context:
 
 | Tier | VRAM | Fits (q4 weights, q8_0 KV, 1 slot) | Example |
 |---|---|---|---|
@@ -62,9 +125,9 @@ so each tier's ceiling model fits its own VRAM at 32k/16k/8k context:
 ## Publishing (maintainer only)
 
 `bootstrap.ps1` is **pinned and fails closed**: it refuses to run unless the
-download is verified against a known commit SHA (git path) or zip SHA256 (no-git
-path). After cutting a release tag, fill the two pins so friends get a verified
-download:
+download is verified against a known commit SHA (git path) or zip SHA256
+(no-git path). After cutting a release tag, fill the two pins so friends get a
+verified download:
 
 ```powershell
 # 1. Cut and push the tag at the reviewed commit:
