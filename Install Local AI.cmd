@@ -1,11 +1,12 @@
 @echo off
-title Local AI - installer
+title AFK AI - installer
 echo.
-echo   Local AI - guided installer
-echo   ---------------------------
+echo   AFK AI - guided installer
+echo   -------------------------
 echo   This checks your PC, picks AI models that fit your graphics card,
-echo   and sets up a private local chat (like ChatGPT, but on your own PC).
-echo   Nothing leaves your computer unless you turn that on yourself.
+echo   and sets up a local-first AI chat on your own PC.
+echo   Model inference can stay local. Setup, model downloads, and features
+echo   such as web search can use the internet when needed or enabled.
 echo.
 echo   If an earlier try failed, no cleanup needed - the installer moves the
 echo   old folder aside by itself and starts fresh.
