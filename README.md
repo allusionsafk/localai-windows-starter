@@ -2,8 +2,8 @@
 
 > **Friend Beta · 0.1.7rc1** — Windows-first, local-first, and still rough around the edges.
 
-AFK AI is a private, ChatGPT-style AI workspace for Windows. The model runs on
-your own machine through **Ollama**; Open WebUI provides chat, SearXNG provides
+AFK AI is a local-first, ChatGPT-style AI workspace for Windows. The model runs
+on your own machine through **Ollama**; Open WebUI provides chat, SearXNG provides
 optional web search, and local voice is available through Kokoro.
 
 **Model inference and chat history stay on your PC.** Setup/model downloads and
@@ -50,6 +50,9 @@ The AFK AI stack is **loopback-only by default**:
 - **The first Open WebUI account you create becomes the local admin/owner.** It
   is stored in the local Open WebUI database, not an AFK AI cloud account.
 
+For vulnerability reporting and the public security boundary, see
+[SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 ### Easiest: download from the AFK AI site
@@ -63,8 +66,16 @@ The AFK AI stack is **loopback-only by default**:
 3. Follow the on-screen prompts. The installer checks the machine, installs
    missing prerequisites where supported, picks a model that fits the GPU, and
    brings up the local stack.
-4. If Windows/Docker reports that hardware virtualization is disabled, stop
-   there and enable virtualization in firmware before continuing.
+4. If Windows or Docker reports a virtualization/WSL blocker, stop there rather
+   than guessing at system changes. The cause may be firmware virtualization, a
+   Windows virtualization feature, WSL readiness, Docker state, or a required
+   reboot.
+
+> **Current Friend Beta limitation:** virtualization, WSL, and Docker readiness
+> are not classified early enough yet. A clean-machine run can reach Docker
+> Desktop before the installer exposes the actual Windows blocker. The next
+> installer milestone is an early, resumable preflight with one precise recovery
+> action. This is documented as a known limitation, not a completed fix.
 
 > If Windows Smart App Control blocks the installer without offering a normal
 > run option, **do not disable Smart App Control just for this beta**. Use the
@@ -176,10 +187,12 @@ PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
 
 ## Docs
 
-- `docs/webbrain.md` — reliable multi-step browser automation with a local
-  model.
-- `installer/README.md` — the guided installer design, capability tiers, and
-  maintainer publishing steps.
+- [SUPPORT.md](SUPPORT.md) — Friend Beta support scope and what to include in a useful report.
+- [SECURITY.md](SECURITY.md) — private vulnerability reporting and security/privacy scope.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — focused contribution and test expectations.
+- [`docs/releases/0.1.7rc1.md`](docs/releases/0.1.7rc1.md) — current Friend Beta release-note draft and known limitations.
+- `docs/webbrain.md` — reliable multi-step browser automation with a local model.
+- `installer/README.md` — guided installer design, capability tiers, and maintainer publishing steps.
 
 ## Requirements
 
@@ -228,6 +241,13 @@ applicable, and clean uninstall pass on real hardware.
 AFK AI is the product name. The repository and internal package still use
 `localai` in several places for continuity. This project is **not affiliated
 with, or endorsed by, mudler/LocalAI or localai.io**.
+
+## Support and security
+
+Normal setup, compatibility, and product bugs belong in the repository's focused
+issue forms. Start with [SUPPORT.md](SUPPORT.md). Security or privacy
+vulnerabilities should use the private reporting path in [SECURITY.md](SECURITY.md),
+not a public issue containing sensitive details.
 
 ## License
 
