@@ -1,0 +1,64 @@
+name: Hardware / compatibility problem
+description: Report a GPU, CPU, memory, Windows, virtualization, WSL, or Docker compatibility problem.
+title: "[compat] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share only the hardware and Windows details needed to reproduce the compatibility problem. Do not paste a full machine inventory or sensitive diagnostics.
+  - type: input
+    id: version
+    attributes:
+      label: AFK AI version or commit
+      placeholder: v0.1.7rc1
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and edition
+      placeholder: Windows 11 Home 24H2
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: NVIDIA GeForce RTX 4060 Laptop GPU
+  - type: input
+    id: ram
+    attributes:
+      label: Installed RAM
+      placeholder: 32 GB
+  - type: textarea
+    id: virtualization
+    attributes:
+      label: Virtualization / WSL / Docker state
+      description: Include what Task Manager, Windows, WSL, or Docker reports if this is part of the problem.
+  - type: textarea
+    id: observed
+    attributes:
+      label: What did AFK AI detect or recommend?
+      description: Include the relevant capability tier, model recommendation, warning, or exact setup message.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is incompatible or unexpected?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed secrets, credentials, chats, prompts, documents, and unrelated personal or machine information.
+          required: true
