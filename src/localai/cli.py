@@ -15,6 +15,7 @@ from localai.dashboard import serve_dashboard
 from localai.firewall import collect_firewall_report
 from localai.game_mode import collect_game_mode_report
 from localai.health import collect_health_report
+from localai.hwcaps import format_hardware_report, probe_hardware
 from localai.installer_vet import collect_vet_report
 from localai.model_aliases import collect_model_aliases_report
 from localai.model_scout import collect_model_scout_report
@@ -391,6 +392,34 @@ def vet(
     for line in lines:
         typer.echo(line)
     raise typer.Exit(code=code)
+
+
+@app.command()
+def hardware(
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit one bounded JSON hardware capability report.",
+        ),
+    ] = False,
+    timeout_sec: Annotated[
+        int,
+        typer.Option(
+            "--timeout-sec",
+            help="Seconds allowed for each read-only hardware probe.",
+            min=1,
+            max=60,
+        ),
+    ] = 5,
+) -> None:
+    """Report detected hardware and honest runtime support status."""
+    report = probe_hardware(timeout_sec=timeout_sec)
+    if json_output:
+        typer.echo(report.to_json())
+        return
+    for line in format_hardware_report(report):
+        typer.echo(line)
 
 
 @app.command()

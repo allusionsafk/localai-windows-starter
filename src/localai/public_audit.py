@@ -122,19 +122,14 @@ def build_patterns(
     *,
     owner: str | None = None,
 ) -> list[AuditPattern]:
-    username = os.environ.get("USERNAME", "")
-    computer_name = os.environ.get("COMPUTERNAME", "")
+    username = os.environ.get("USERNAME", "").strip()
+    computer_name = os.environ.get("COMPUTERNAME", "").strip()
     # Use \s+ (not a literal space) so this definition line does not match
     # itself when the audit scans its own source. Still catches the reference
     # GPU phrasing in user-facing docs.
     hardware_pattern = r"RTX\s*4080|laptop\s+GPU"
 
     patterns = [
-        AuditPattern(
-            "Windows user path",
-            rf"C:\\Users\\{re.escape(username)}|Users/{re.escape(username)}",
-        ),
-        AuditPattern("Computer name", rf"\b{re.escape(computer_name)}\b"),
         AuditPattern("Tailnet URL", r"\b[a-z0-9-]+\.tail[0-9a-f]+\.ts\.net\b"),
         AuditPattern(
             "Tailscale IPv4",
@@ -148,6 +143,17 @@ def build_patterns(
         AuditPattern("Laptop hardware", hardware_pattern),
     ]
 
+    if username:
+        patterns.append(
+            AuditPattern(
+                "Windows user path",
+                rf"C:\\Users\\{re.escape(username)}|Users/{re.escape(username)}",
+            )
+        )
+    if computer_name:
+        patterns.append(
+            AuditPattern("Computer name", rf"\b{re.escape(computer_name)}\b")
+        )
     if owner:
         patterns.append(AuditPattern("Origin GitHub owner", rf"\b{re.escape(owner)}\b"))
 

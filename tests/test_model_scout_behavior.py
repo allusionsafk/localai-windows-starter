@@ -202,10 +202,34 @@ def test_get_vram_gb_parses_and_rounds_to_one_decimal(
 ) -> None:
     # 16376 MiB -> 16.0 (the rounding contract that keeps a nominal-16 GB card in
     # tier S rather than dropping to A; audit finding 15).
-    result = model_scout.CommandResult(("nvidia-smi",), 0, "16376\n", "")
+    result = model_scout.CommandResult(
+        ("nvidia-smi",),
+        0,
+        "0, NVIDIA Test GPU, 16376, 581.80\n",
+        "",
+    )
     monkeypatch.setattr(model_scout, "run_command", lambda *a, **k: result)
 
     assert model_scout.get_vram_gb(timeout_sec=5) == 16.0
+
+
+def test_get_vram_gb_keeps_first_card_semantics_for_multi_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = model_scout.CommandResult(
+        ("nvidia-smi",),
+        0,
+        (
+            "0, NVIDIA Test GPU A, 12282, 581.80\n"
+            "1, NVIDIA RTX 4090, 24564, 581.80\n"
+        ),
+        "",
+    )
+    monkeypatch.setattr(model_scout, "run_command", lambda *a, **k: result)
+
+    # The report keeps both GPUs, but Scout deliberately retains its old
+    # first-card budget instead of silently summing unrelated VRAM pools.
+    assert model_scout.get_vram_gb(timeout_sec=5) == 12.0
 
 
 def test_get_budget_treats_missing_vram_as_zero_not_twelve(

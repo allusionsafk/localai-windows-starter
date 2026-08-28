@@ -1,6 +1,6 @@
 """Behavior tests for the public-audit origin self-reference exemption."""
 
-from localai.public_audit import Finding, partition_self_references
+from localai.public_audit import Finding, build_patterns, partition_self_references
 
 # Built at runtime so public-audit -Strict does not flag its own fixtures:
 # the audit scans tracked source lines for the literal owner marker.
@@ -102,3 +102,25 @@ def test_no_origin_means_no_exemption() -> None:
     kept, allowed = partition_self_references(findings, None)
     assert kept == findings
     assert allowed == 0
+
+
+def test_missing_windows_identity_does_not_create_empty_regexes(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("USERNAME", raising=False)
+    monkeypatch.delenv("COMPUTERNAME", raising=False)
+
+    names = {pattern.name for pattern in build_patterns()}
+
+    assert "Windows user path" not in names
+    assert "Computer name" not in names
+
+
+def test_windows_identity_patterns_are_added_independently(monkeypatch) -> None:
+    monkeypatch.setenv("USERNAME", "portable-user")
+    monkeypatch.delenv("COMPUTERNAME", raising=False)
+
+    names = {pattern.name for pattern in build_patterns()}
+
+    assert "Windows user path" in names
+    assert "Computer name" not in names

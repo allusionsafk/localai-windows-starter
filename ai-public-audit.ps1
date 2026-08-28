@@ -65,13 +65,20 @@ if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) {
 $hardwarePattern = ('RTX\s*' + '4080') + '|' + ('laptop ' + 'GPU')
 
 $patterns = @(
-  @{ Name = 'Windows user path'; Pattern = 'C:\\Users\\' + (Escape-RegexLiteral $env:USERNAME) + '|Users/' + (Escape-RegexLiteral $env:USERNAME) },
-  @{ Name = 'Computer name'; Pattern = '\b' + (Escape-RegexLiteral $env:COMPUTERNAME) + '\b' },
   @{ Name = 'Tailnet URL'; Pattern = '\b[a-z0-9-]+\.tail[0-9a-f]+\.ts\.net\b' },
   @{ Name = 'Tailscale IPv4'; Pattern = '\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}\b' },
   @{ Name = 'Tailscale IPv6'; Pattern = '\bfd[0-9a-f]{2}:[0-9a-f]{1,4}:[0-9a-f]{1,4}\b' },
   @{ Name = 'Laptop hardware'; Pattern = $hardwarePattern }
 )
+
+$username = "$env:USERNAME".Trim()
+$computerName = "$env:COMPUTERNAME".Trim()
+if ($username) {
+  $patterns += @{ Name = 'Windows user path'; Pattern = 'C:\\Users\\' + (Escape-RegexLiteral $username) + '|Users/' + (Escape-RegexLiteral $username) }
+}
+if ($computerName) {
+  $patterns += @{ Name = 'Computer name'; Pattern = '\b' + (Escape-RegexLiteral $computerName) + '\b' }
+}
 
 $origin = Get-GitHubOriginRepo
 if ($origin) {

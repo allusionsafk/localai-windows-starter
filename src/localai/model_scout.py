@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import ctypes
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from localai import hwcaps
 from localai.ops import CommandResult, run_command
 from localai.paths import REPO_ROOT, repo_path
 from localai.scout_categories import CATEGORIES, Category, category_by_id
@@ -702,53 +703,39 @@ def get_ram_gb(*, timeout_sec: int) -> float:
 
 
 def get_total_physical_memory_bytes() -> int | None:
-    class MemoryStatusEx(ctypes.Structure):
-        _fields_ = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    status = MemoryStatusEx()
-    status.dwLength = ctypes.sizeof(MemoryStatusEx)
-    try:
-        ok = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-    except (AttributeError, OSError):
-        return None
-    if not ok:
-        return None
-    return int(status.ullTotalPhys)
+    """Portable total physical memory through the hardware capability seam."""
+    return hwcaps.probe_total_memory(
+        system=platform.system(),
+        command_runner=run_command,
+        timeout_sec=5,
+    ).total_bytes
 
 
 def get_vram_gb(*, timeout_sec: int) -> float | None:
-    """Total VRAM in GB from nvidia-smi, or ``None`` when it can't be read.
+    """First NVIDIA card's VRAM, preserving the historical Scout contract.
 
-    Returns ``None`` (not a phantom 12) when nvidia-smi is absent or its output
-    is unparseable, so a non-NVIDIA / CPU box is treated as having no GPU budget
-    rather than falsely recommending models it cannot run (audit finding 4).
+    The portable report represents every accelerator. Scout still uses the
+    first NVIDIA card because changing to summed or unified memory would alter
+    existing fit decisions. Returns ``None`` (not a phantom 12) when no valid
+    NVIDIA report exists.
     """
-    result = run_command(
-        [
-            "nvidia-smi",
-            "--query-gpu=memory.total",
-            "--format=csv,noheader,nounits",
-        ],
-        cwd=REPO_ROOT,
+    report = hwcaps.probe_hardware(
         timeout_sec=timeout_sec,
+        command_runner=run_command,
+        memory_probe=lambda: None,
     )
-    if result.code != 0 or not result.text.strip():
+    first_nvidia = next(
+        (
+            accelerator
+            for accelerator in report.accelerators
+            if accelerator.vendor == "NVIDIA"
+            and accelerator.dedicated_memory_bytes is not None
+        ),
+        None,
+    )
+    if first_nvidia is None or first_nvidia.dedicated_memory_bytes is None:
         return None
-    first = result.text.splitlines()[0].strip()
-    try:
-        return round(float(first) / 1024, 1)
-    except ValueError:
-        return None
+    return round(first_nvidia.dedicated_memory_bytes / 1024**3, 1)
 
 
 def discover_candidates(
