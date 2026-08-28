@@ -67,8 +67,8 @@ For vulnerability reporting and the public security boundary, see
    a downloaded unsigned script. You can open the file in Notepad first to
    inspect it before running it.
 3. Follow the on-screen prompts. The installer checks the machine, installs
-   missing prerequisites where supported, picks a model that fits the GPU, and
-   brings up the local stack.
+   missing prerequisites where supported, picks a model that fits the machine,
+   and brings up the local stack.
 4. If Windows or Docker reports a virtualization/WSL blocker, stop there rather
    than guessing at system changes. The cause may be firmware virtualization, a
    Windows virtualization feature, WSL readiness, Docker state, or a required
