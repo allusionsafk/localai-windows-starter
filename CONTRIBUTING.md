@@ -1,51 +1,83 @@
 # Contributing to AFK AI
 
-AFK AI is still proving its Windows Friend Beta. Contributions are welcome when they make the supported path safer, clearer, more reliable, or easier to test.
+AFK AI is still proving its Windows Friend Beta. Contributions are welcome when
+they make the supported path safer, clearer, more reliable, or easier to test.
 
-## Scope first
+## Keep the scope sharp
 
-Prefer one demonstrated problem and one coherent fix. Avoid broad refactors, repository-wide renames, dependency churn, or speculative architecture changes mixed into a bug fix.
+Prefer one demonstrated problem and one coherent fix.
 
-AFK AI is the customer-facing product name. Existing `localai` package, command, and repository names may remain where changing them would create migration risk without improving the product.
+Avoid mixing a focused change with:
 
-## Before changing behaviour
+- broad refactors
+- repository-wide renames
+- dependency churn
+- speculative architecture changes
+- unrelated visual or documentation cleanup
 
-1. Reproduce or establish the current baseline.
+**AFK AI** is the customer-facing product name. Existing `localai` package,
+command, and repository names can remain where renaming would add migration risk
+without improving the product.
+
+## Before changing behavior
+
+1. Reproduce the problem or establish the current baseline.
 2. Add or identify a regression test when practical.
-3. Implement the smallest change that addresses the demonstrated mechanism.
-4. Run focused tests first, then the appropriate wider cheap checks.
-5. Keep documentation aligned with actual runtime behaviour.
+3. Implement the smallest maintainable fix for the demonstrated mechanism.
+4. Run focused checks first.
+5. Run the appropriate wider cheap checks once the change is stable.
+6. Keep documentation aligned with actual runtime behavior.
 
-Do not claim a platform, recovery path, privacy property, or installer behaviour has been tested unless it actually has.
+Do not claim that a platform, recovery path, privacy property, or installer
+behavior has been tested unless it actually has.
 
 ## Privacy and security defaults
 
-Changes must preserve the project's local-first boundary:
+Changes must preserve AFK AI's local-first boundary.
 
-- do not expose local services to the LAN or internet by default;
-- do not add telemetry or upload diagnostics without explicit product review;
-- do not include chats, prompts, documents, credentials, tokens, cookies, `.env` values, or unrelated machine data in diagnostics;
-- do not tell users to disable Defender, Smart App Control, antivirus, UAC, or other Windows security controls as a blanket workaround;
-- do not permanently weaken PowerShell execution policy;
-- do not bypass pinned download or integrity checks for convenience.
+Do not:
 
-Security vulnerabilities should follow [SECURITY.md](SECURITY.md), not a public issue containing exploit details.
+- expose local services to the LAN or internet by default
+- add telemetry or upload diagnostics without explicit product review
+- include chats, prompts, documents, credentials, tokens, cookies, `.env`
+  values, or unrelated machine data in diagnostics
+- tell users to disable Defender, Smart App Control, antivirus, UAC, or other
+  Windows security controls as a blanket workaround
+- permanently weaken PowerShell execution policy
+- bypass pinned download or integrity checks for convenience
+
+Security vulnerabilities belong in the private reporting flow documented in
+[SECURITY.md](SECURITY.md).
 
 ## Tests and checks
 
-Use the checks appropriate to the files you touched. The Python project uses `pytest`, Ruff, and mypy; installer and public-boundary changes also have repository-specific checks under `tests/` and `ai-public-audit.ps1`.
+Use the checks appropriate to the files you touched.
 
-Do not run heavyweight model downloads, Docker setup, GPU workloads, or unrelated end-to-end work merely to change documentation or a pure helper.
+The Python project uses:
+
+```text
+pytest
+ruff
+mypy
+```
+
+Installer and public-boundary work also has repository-specific checks under
+`tests/` and `ai-public-audit.ps1`.
+
+Do not run heavyweight model downloads, Docker setup, GPU workloads, or
+unrelated end-to-end work merely to change documentation or a pure helper.
 
 ## Pull requests
 
-A useful pull request explains:
+A useful pull request answers five questions:
 
-- the concrete problem;
-- what changed;
-- what did **not** change;
-- tests/checks actually run;
-- known limitations or follow-up work;
-- any privacy, security, installation, or release impact.
+1. What concrete problem does this solve?
+2. What changed?
+3. What intentionally did not change?
+4. What checks actually ran, with results?
+5. What limitations or follow-up work remain?
 
-Keep unrelated cleanup out of the same PR. Preserve release pins unless the change is specifically a reviewed release operation.
+Call out any privacy, security, installation, networking, or release impact.
+
+Keep release pins unchanged unless the PR is specifically a reviewed release
+operation.

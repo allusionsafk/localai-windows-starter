@@ -8,12 +8,16 @@
 
 ## Verification
 
-<!-- List only checks/tests you actually ran. -->
+<!-- List only checks or tests you actually ran, with results when useful. -->
 
 ## Risk / boundaries
 
-<!-- Privacy, security, installer, release-pin, network, or migration impact. Write "none" when genuinely none. -->
+<!-- Privacy, security, installer, release-pin, network, migration, or supported-platform impact. Write "none" when genuinely none. -->
+
+## Known limitations
+
+<!-- What remains unverified, environment-dependent, approximate, or intentionally out of scope? -->
 
 ## Follow-up
 
-<!-- Remaining limitations or deferred work, if any. -->
+<!-- Deferred work, if any. -->
