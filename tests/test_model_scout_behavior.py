@@ -298,6 +298,7 @@ def test_prepare_pick_threads_num_ctx_to_modelfile(
         "select_quant_artefact",
         lambda repo: model_scout.QuantArtefact("Q4_K_M", None),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(model_scout, "model_present", lambda model, **kwargs: False)
     monkeypatch.setattr(model_scout, "stop_model", lambda model, **kwargs: None)
@@ -423,6 +424,7 @@ def test_collect_prepare_no_pull_streams_lines_live(
         "select_quant_artefact",
         lambda repo: model_scout.QuantArtefact("UD-Q4_K_XL", None),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
 
     echoed: list[str] = []
     code, lines = model_scout.collect_model_scout_report(
@@ -479,6 +481,7 @@ def test_prepare_pick_pulls_grounds_benchmarks_and_records(
         "select_quant_artefact",
         lambda repo: model_scout.QuantArtefact("Q4_K_M", None),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(
         model_scout, "model_present", lambda model, **kwargs: model == "qwen-base"
@@ -558,6 +561,7 @@ def test_prepare_pick_reports_pull_failure(
             ("ollama", *args), 1, "", "pull model manifest: file does not exist"
         ),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
 
     code = model_scout.prepare_pick(
         _eligible_candidate(),
@@ -1349,6 +1353,7 @@ def test_prepare_pick_refuses_a_measured_artefact_that_cannot_be_resident(
         "select_quant_artefact",
         lambda repo: model_scout.QuantArtefact("Q8_0", 32_000_000_000),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
     pulled: list[str] = []
     monkeypatch.setattr(
         model_scout,
@@ -1385,6 +1390,7 @@ def test_prepare_pick_reports_the_measured_size_and_still_pulls_when_it_fits(
         "select_quant_artefact",
         lambda repo: model_scout.QuantArtefact("Q4_K_M", 18_560_000_000),
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
     monkeypatch.setattr(
         model_scout,
         "pull_with_retry",
@@ -1435,6 +1441,7 @@ def test_prepare_pick_low_disk_guard_runs_before_any_network_call(
         now=datetime(2026, 8, 29, 12, 0),
         probe_timeout_sec=5,
     )
+    monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
     assert code == 0
     assert said[0].startswith("[!] Low disk")
 
@@ -1515,3 +1522,168 @@ def test_measured_size_and_ram_ceiling_agree_on_the_boundary() -> None:
     assert at is not None and over is not None
     assert at.gb <= ram_ceil
     assert over.gb > ram_ceil
+
+
+# ------------------------------------------------- exact KV from architecture
+#
+# The bucket estimator keys on total parameters, which cannot see how many KV
+# heads a model has. For a sparse MoE with few KV heads it is more than twice
+# the real cost, which distorts the fit verdict at long contexts.
+
+QWEN3_8B = model_scout.ArchitectureInfo(
+    n_layer=36, n_head_kv=8, head_dim=128, native_context=40960
+)
+QWEN3_30B_A3B = model_scout.ArchitectureInfo(
+    n_layer=48, n_head_kv=4, head_dim=128, native_context=40960
+)
+
+
+def test_exact_kv_matches_the_canonical_formula() -> None:
+    expected = 36 * 2 * 32768 * 8 * 128 * 2 / 1024**3
+    got = model_scout.exact_kv_gb(QWEN3_8B, ctx=32768, parallel=1, kv_factor=1.0)
+    assert got == round(expected, 2) == 4.5
+
+
+def test_exact_kv_beats_the_bucket_for_a_few_kv_head_moe() -> None:
+    exact = model_scout.exact_kv_gb(QWEN3_30B_A3B, ctx=32768, parallel=1, kv_factor=1.0)
+    bucket = model_scout.estimate_kv_gb(30.0, ctx=32768, parallel=1, kv_factor=1.0)
+    assert exact == 3.0
+    assert bucket == 6.4
+    assert bucket > exact * 2  # the distortion this slice removes
+
+
+def test_kv_scales_linearly_with_context() -> None:
+    # Compared against the formula, not against a rounded intermediate: the
+    # returned values are rounded to 2dp, so at8 * 4 drifts by a cent.
+    at8 = model_scout.exact_kv_gb(QWEN3_8B, ctx=8192, parallel=1, kv_factor=1.0)
+    at32 = model_scout.exact_kv_gb(QWEN3_8B, ctx=32768, parallel=1, kv_factor=1.0)
+    assert at8 == round(36 * 2 * 8192 * 8 * 128 * 2 / 1024**3, 2) == 1.12
+    assert at32 == 4.5
+    assert at32 == pytest.approx(at8 * 4, abs=0.02)
+
+
+def test_kv_scales_with_parallel_slots() -> None:
+    one = model_scout.exact_kv_gb(QWEN3_8B, ctx=8192, parallel=1, kv_factor=1.0)
+    four = model_scout.exact_kv_gb(QWEN3_8B, ctx=8192, parallel=4, kv_factor=1.0)
+    assert four == 4.5
+    assert four == pytest.approx(one * 4, abs=0.02)
+    # parallel below 1 is clamped, never zero KV.
+    assert model_scout.exact_kv_gb(
+        QWEN3_8B, ctx=8192, parallel=0, kv_factor=1.0
+    ) == one
+
+
+def test_kv_dtype_factor_changes_the_result() -> None:
+    f16 = model_scout.exact_kv_gb(QWEN3_8B, ctx=32768, parallel=1, kv_factor=1.0)
+    q8 = model_scout.exact_kv_gb(
+        QWEN3_8B, ctx=32768, parallel=1, kv_factor=model_scout.KV_DTYPE_FACTORS["q8_0"]
+    )
+    q4 = model_scout.exact_kv_gb(
+        QWEN3_8B, ctx=32768, parallel=1, kv_factor=model_scout.KV_DTYPE_FACTORS["q4_0"]
+    )
+    assert q8 == round(f16 / 2, 2)
+    assert q4 == round(f16 / 4, 2)
+
+
+def test_kv_does_not_depend_on_parameter_counts_at_all() -> None:
+    a, prov_a = model_scout.resolve_kv_gb(
+        3.0, ctx=16384, parallel=1, kv_factor=1.0, arch=QWEN3_30B_A3B
+    )
+    b, prov_b = model_scout.resolve_kv_gb(
+        300.0, ctx=16384, parallel=1, kv_factor=1.0, arch=QWEN3_30B_A3B
+    )
+    assert a == b
+    assert prov_a == prov_b == "exact-architecture"
+    assert set(inspect.signature(model_scout.ArchitectureInfo).parameters) == {
+        "n_layer",
+        "n_head_kv",
+        "head_dim",
+        "native_context",
+    }
+
+
+def test_missing_architecture_falls_back_to_the_bucket_estimator() -> None:
+    value, provenance = model_scout.resolve_kv_gb(
+        30.0, ctx=32768, parallel=1, kv_factor=1.0, arch=None
+    )
+    assert provenance == "param-buckets"
+    assert value == model_scout.estimate_kv_gb(
+        30.0, ctx=32768, parallel=1, kv_factor=1.0
+    )
+    assert value > 0  # never zero KV for a real context
+
+
+def test_incomplete_or_malformed_config_yields_no_architecture() -> None:
+    bad: list[object] = [
+        None,
+        {},
+        "not a dict",
+        [1, 2, 3],
+        {"num_hidden_layers": 36},
+        {"num_hidden_layers": 36, "num_key_value_heads": 8},
+        {"num_hidden_layers": 0, "num_key_value_heads": 8, "head_dim": 128},
+        {"num_hidden_layers": -36, "num_key_value_heads": 8, "head_dim": 128},
+        {"num_hidden_layers": "36", "num_key_value_heads": 8, "head_dim": 128},
+        {"num_hidden_layers": True, "num_key_value_heads": 8, "head_dim": 128},
+        {"num_hidden_layers": 36, "num_attention_heads": 7, "hidden_size": 4096},
+    ]
+    for config in bad:
+        assert model_scout.parse_architecture(config) is None, config
+
+
+def test_architecture_is_parsed_from_a_real_config_shape() -> None:
+    # Field names as published by unsloth/Qwen3-8B-GGUF's config.json.
+    arch = model_scout.parse_architecture(
+        {
+            "num_hidden_layers": 36,
+            "num_key_value_heads": 8,
+            "num_attention_heads": 32,
+            "hidden_size": 4096,
+            "head_dim": 128,
+            "max_position_embeddings": 40960,
+            "model_type": "qwen3",
+        }
+    )
+    assert arch == QWEN3_8B
+
+
+def test_head_dim_is_derived_when_not_published() -> None:
+    arch = model_scout.parse_architecture(
+        {"num_hidden_layers": 32, "num_attention_heads": 32, "hidden_size": 4096}
+    )
+    assert arch is not None
+    assert arch.head_dim == 128
+    assert arch.n_head_kv == 32  # MHA: KV heads fall back to attention heads
+
+
+def test_fetch_hf_config_returns_none_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(request, timeout=None):  # noqa: ANN001 - urlopen stub
+        raise OSError("404")
+
+    monkeypatch.setattr(model_scout, "urlopen", boom)
+    assert model_scout.fetch_hf_config("x/y") is None
+
+
+def test_discovery_makes_no_per_candidate_config_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def must_not_be_called(repo: str) -> object:
+        raise AssertionError("per-candidate metadata request during discovery")
+
+    monkeypatch.setattr(model_scout, "fetch_hf_config", must_not_be_called)
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", must_not_be_called)
+    monkeypatch.setattr(
+        model_scout,
+        "fetch_hf_models",
+        lambda author: [
+            {"id": f"{author}/Thing-8B-GGUF", "downloads": 10, "lastModified": ""}
+        ],
+    )
+    rows = model_scout.discover_candidates(
+        budget=model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=100),
+        notes=[],
+        now=datetime(2026, 8, 29, 12, 0),
+    )
+    assert rows
