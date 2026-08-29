@@ -233,13 +233,45 @@ Get-CimInstance Win32_Processor |
 
 Classification rules:
 
-- all reliable, non-null processor results are `True` -> READY;
-- all reliable, non-null processor results are `False` ->
+- `Win32_ComputerSystem.HypervisorPresent` is `True` -> READY, whatever the
+  processor property says (see "hypervisor masking" below);
+- otherwise, all reliable, non-null processor results are `True` -> READY;
+- otherwise, all reliable, non-null processor results are `False` ->
   FIRMWARE_VIRTUALIZATION_DISABLED;
 - mixed `True`/`False`, null, unsupported property, access failure, malformed
   result, or timeout -> UNKNOWN.
 
 Do not use localized Task Manager or `systeminfo` prose as the primary signal.
+
+#### Hypervisor masking (implementation finding, 2026-08-28)
+
+Implementation on a real Windows 11 build 26200 machine (i9-14900HX) with
+virtualization-based security running measured:
+
+```text
+Win32_Processor.VirtualizationFirmwareEnabled           = False
+Win32_Processor.SecondLevelAddressTranslationExtensions = False
+Win32_Processor.VMMonitorModeExtensions                 = False
+Win32_ComputerSystem.HypervisorPresent                  = True
+Win32_DeviceGuard.VirtualizationBasedSecurityStatus     = 2 (running)
+systeminfo: "A hypervisor has been detected. Features required for Hyper-V
+             will not be displayed."
+```
+
+Once a hypervisor owns the virtualization extensions, Windows stops reporting
+the underlying firmware features and the processor properties read `False`. That
+combination cannot be a genuine reading: a running hypervisor cannot exist
+without firmware virtualization.
+
+The rule as originally written would therefore have told every Hyper-V, WSL 2,
+or Credential Guard machine to go and change a BIOS setting that is already
+correct - a confident wrong instruction, which is the specific failure this
+design exists to prevent.
+
+`HypervisorPresent = True` is consequently treated as authoritative proof of
+firmware virtualization, and outranks the processor property. It can only raise
+confidence, never lower it: an absent hypervisor still falls through to the
+processor rules above.
 
 ### 6.3 Windows virtualization / hypervisor layer
 
@@ -639,6 +671,7 @@ as `local-npipe`, `remote-tcp`, `remote-ssh`, or `unknown`.
 |---|---|
 | CIM firmware property missing | UNKNOWN; never guess disabled |
 | processor firmware signals disagree | UNKNOWN |
+| firmware reads `False` while a hypervisor is present | READY; the reading is masked, not disabled |
 | firmware enabled but hypervisor absent | classify Windows hypervisor layer, not firmware-disabled |
 | Windows feature query unavailable | UNKNOWN unless stronger live evidence proves active backend readiness |
 | WSL command missing | distinguish absent WSL from unneeded backend |
