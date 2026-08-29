@@ -216,6 +216,16 @@ def test_terminal_status_line_matches_legacy_width() -> None:
     )
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason=(
+        "path_list_contains answers a Windows question - is this directory on "
+        "the Windows PATH - and is built from Windows semantics: os.pathsep is "
+        "';' only on Windows, os.path.normcase folds case only on Windows, and "
+        "drive-letter paths are not absolute anywhere else. The fixture below "
+        "is a Windows PATH string, so off Windows this asserts nothing real."
+    ),
+)
 def test_terminal_path_list_contains() -> None:
     directory = Path("C:/Users/example/.local/bin")
     path_value = f"C:\\Other;{directory}"
