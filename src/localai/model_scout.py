@@ -178,12 +178,125 @@ KV_DTYPE_FACTORS: dict[str, float] = {
     "q4_1": 0.25,
 }
 
+# Bits per weight per GGUF encoding, from llama.cpp's "Tensor Encoding Schemes"
+# wiki. Used only as a SECOND-tier estimate: when the exact artefact size is
+# known it always wins (see resolve_weight_sizing).
+#
+# These are base-type figures. K-quants keep embedding/output tensors at higher
+# precision, so a real Q4_K_M file is larger than 4.5 bpw implies - which is why
+# the table is never allowed to shrink an estimate below WEIGHTS_GB_PER_B.
+QUANT_BPW: dict[str, float] = {
+    "F32": 32.0,
+    "F16": 16.0,
+    "BF16": 16.0,
+    "Q8_0": 8.0,
+    "Q8_1": 8.0,
+    "Q6_K": 6.5625,
+    "Q5_K": 5.5,
+    "Q5_0": 5.0,
+    "Q5_1": 5.0,
+    "Q4_K": 4.5,
+    "IQ4_NL": 4.5,
+    "IQ4_XS": 4.25,
+    "Q4_0": 4.0,
+    "Q4_1": 4.0,
+    "Q3_K": 3.4375,
+    "IQ3_S": 3.4375,
+    "IQ3_XXS": 3.0625,
+    "Q2_K": 2.5625,
+    "IQ2_S": 2.5,
+    "IQ2_XS": 2.31,
+    "IQ2_XXS": 2.0625,
+    "IQ1_M": 1.75,
+    "IQ1_S": 1.5,
+}
+# Size-class suffixes on a K-quant (Q4_K_M, Q4_K_S, ...). IQ types such as
+# IQ4_XS are whole names and are matched before any suffix is stripped.
+_QUANT_SIZE_SUFFIXES = ("_XXL", "_XL", "_XS", "_S", "_M", "_L")
+
+GB = 1_000_000_000  # HuggingFace reports file sizes in decimal bytes.
+
 
 @dataclass(frozen=True)
 class Budget:
     ram_gb: float
     vram_gb: float
     disk_free_gb: float
+
+
+@dataclass(frozen=True)
+class QuantArtefact:
+    """The quant that will actually be pulled, and its exact size when known."""
+
+    quant: str
+    size_bytes: int | None
+
+
+@dataclass(frozen=True)
+class WeightSizing:
+    """Resident weight size, and how much the number can be trusted.
+
+    ``provenance`` is one of:
+
+    ``measured-file``     exact bytes of the artefact that will be pulled;
+    ``bpw-table``         derived from the quant's bits-per-weight;
+    ``global-heuristic``  ``total_params x WEIGHTS_GB_PER_B`` - today's estimate.
+    """
+
+    gb: float
+    quant: str | None
+    provenance: str
+
+
+def quant_bits_per_weight(quant: str | None) -> float | None:
+    """Bits per weight for a GGUF quant tag, or None if it is not recognised."""
+    if not quant:
+        return None
+    name = quant.strip().upper()
+    if name.startswith("UD-"):  # Unsloth dynamic quants: UD-Q4_K_XL -> Q4_K_XL
+        name = name[3:]
+    if name in QUANT_BPW:
+        return QUANT_BPW[name]
+    for suffix in _QUANT_SIZE_SUFFIXES:
+        if name.endswith(suffix):
+            base = name[: -len(suffix)]
+            if base in QUANT_BPW:
+                return QUANT_BPW[base]
+            break
+    return None
+
+
+def resolve_weight_sizing(
+    *,
+    total_b: float | None,
+    quant: str | None = None,
+    artefact_bytes: int | None = None,
+) -> WeightSizing | None:
+    """Resident weight size, preferring measured evidence over estimates.
+
+    Deliberately takes ``total_b`` and never an active-parameter count: a MoE
+    loads every expert weight, so active parameters describe compute and offload
+    cost and must never shrink a memory figure.
+
+    Missing metadata must not make a model look smaller than the evidence
+    supports, so when only the quant is known the estimate is the LARGER of the
+    bits-per-weight figure and the global heuristic. Under-pricing is the
+    dangerous direction: it reports that a model fits when it does not.
+    """
+    if artefact_bytes and artefact_bytes > 0:
+        return WeightSizing(round(artefact_bytes / GB, 2), quant, "measured-file")
+    if total_b is None:
+        return None
+    heuristic = total_b * WEIGHTS_GB_PER_B
+    bpw = quant_bits_per_weight(quant)
+    if bpw is None:
+        return WeightSizing(round(heuristic, 1), quant, "global-heuristic")
+    from_bpw = total_b * bpw / 8.0
+    if from_bpw > heuristic:
+        return WeightSizing(round(from_bpw, 1), quant, "bpw-table")
+    # A base-type figure below the heuristic understates a K-quant's
+    # higher-precision tensors; keep the conservative number.
+    return WeightSizing(round(heuristic, 1), quant, "global-heuristic")
 
 
 @dataclass(frozen=True)
@@ -362,6 +475,8 @@ def prepare_pick(
     num_ctx: int = DEFAULT_GROUNDED_CTX,
 ) -> int:
     """Pull + ground + benchmark the pick. Never touches the Open WebUI default."""
+    # Cheap guard first, on the scout's own estimate: if there is already not
+    # enough disk, do not spend a network round trip to learn the exact size.
     if pick.size_gb and budget.disk_free_gb < pick.size_gb + 12:
         say(
             f"[!] Low disk (need ~{format_num(pick.size_gb + 12)}GB, have "
@@ -371,8 +486,51 @@ def prepare_pick(
         return 0
 
     repo = pick.id
-    quant = best_quant(repo) or "Q4_K_M"
+    # The scout's verdict came from a parameter-count estimate. This is the
+    # first point at which the exact bytes of the file that will actually be
+    # pulled are known, and the tree fetch behind it already happens here.
+    artefact = select_quant_artefact(repo)
+    quant = (artefact.quant if artefact else None) or "Q4_K_M"
+    sizing = resolve_weight_sizing(
+        total_b=pick.total,
+        quant=quant,
+        artefact_bytes=artefact.size_bytes if artefact else None,
+    )
+    # Never let a missing measurement look smaller than the scout's own estimate.
+    need_gb = max(sizing.gb if sizing else 0.0, pick.size_gb or 0.0)
+
     say(f"[+] Quant chosen for {format_num(budget.vram_gb)}GB VRAM: {quant}")
+    if sizing and sizing.provenance == "measured-file":
+        estimate = pick.size_gb
+        detail = f"    artefact size: {format_num(sizing.gb)}GB (measured)"
+        if estimate and abs(estimate - sizing.gb) >= 0.5:
+            detail += f", scout estimated {format_num(estimate)}GB"
+        say(detail)
+    elif sizing:
+        say(f"    artefact size: ~{format_num(sizing.gb)}GB ({sizing.provenance})")
+
+    # The scout ranked this candidate at an estimated size. If the real artefact
+    # cannot be resident at all, stop before the multi-gigabyte download rather
+    # than discovering it at load time.
+    ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
+    if sizing and sizing.provenance == "measured-file" and sizing.gb > ram_ceil:
+        say(
+            f"[!] {quant} is {format_num(sizing.gb)}GB, over this machine's "
+            f"~{format_num(ram_ceil)}GB usable memory. Skipping pull."
+        )
+        log.append(
+            f"- SKIPPED pull ({quant} {format_num(sizing.gb)}GB > "
+            f"{format_num(ram_ceil)}GB usable): {pick.id}"
+        )
+        return 0
+
+    if need_gb and budget.disk_free_gb < need_gb + 12:
+        say(
+            f"[!] Low disk (need ~{format_num(need_gb + 12)}GB, have "
+            f"{format_num(budget.disk_free_gb)}GB). Skipping pull."
+        )
+        log.append(f"- SKIPPED pull (low disk): {pick.id}")
+        return 0
     if no_pull:
         say("    (--no-pull: skipping the actual download)")
         return 0
@@ -570,13 +728,24 @@ def grounded_modelfile(
     )
 
 
-def best_quant(repo: str) -> str | None:
-    """Pick a ~Q4 quant tag from the repo's GGUF files (None on API failure)."""
+def select_quant_artefact(repo: str) -> QuantArtefact | None:
+    """Pick a ~Q4 quant AND keep its exact file size (None on API failure).
+
+    The HuggingFace tree response already carries a ``size`` for every file, and
+    this is the single place the tree is fetched, so the exact resident size of
+    the artefact that will be pulled costs no extra request. It used to be read
+    for the filename and thrown away.
+
+    A quant split across shards (``...-00001-of-00002.gguf``) has its parts
+    summed, so a sharded model is not priced as one shard.
+    """
     try:
         tree = fetch_hf_tree(repo)
     except OSError:
         return None
     quants: list[str] = []
+    sizes: dict[str, int] = {}
+    unsized: set[str] = set()
     for entry in tree:
         if not isinstance(entry, dict):
             continue
@@ -584,13 +753,35 @@ def best_quant(repo: str) -> str | None:
         if not re.search(r"(?i)\.gguf$", path):
             continue
         match = re.search(r"(?i)(UD-)?(I?Q\d[0-9A-Z_]*)", path)
-        if match and match.group(0) not in quants:
-            quants.append(match.group(0))
+        if not match:
+            continue
+        quant = match.group(0)
+        if quant not in quants:
+            quants.append(quant)
+        size = entry.get("size")
+        if isinstance(size, int) and size > 0:
+            sizes[quant] = sizes.get(quant, 0) + size
+        else:
+            unsized.add(quant)
+
+    def artefact(quant: str) -> QuantArtefact:
+        # A shard with no size would silently under-count the total, so a quant
+        # with any unsized part reports no size at all rather than a low one.
+        if quant in unsized:
+            return QuantArtefact(quant, None)
+        return QuantArtefact(quant, sizes.get(quant))
+
     for preferred in QUANT_PREFERENCE:
         for quant in quants:
             if quant.lower() == preferred.lower():
-                return quant
-    return quants[0] if quants else None
+                return artefact(quant)
+    return artefact(quants[0]) if quants else None
+
+
+def best_quant(repo: str) -> str | None:
+    """Pick a ~Q4 quant tag from the repo's GGUF files (None on API failure)."""
+    artefact = select_quant_artefact(repo)
+    return artefact.quant if artefact else None
 
 
 def fetch_hf_tree(repo: str) -> list[object]:

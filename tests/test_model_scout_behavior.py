@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import replace
 from datetime import datetime
@@ -292,7 +293,11 @@ def test_prepare_pick_threads_num_ctx_to_modelfile(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "Q4_K_M")
+    monkeypatch.setattr(
+        model_scout,
+        "select_quant_artefact",
+        lambda repo: model_scout.QuantArtefact("Q4_K_M", None),
+    )
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(model_scout, "model_present", lambda model, **kwargs: False)
     monkeypatch.setattr(model_scout, "stop_model", lambda model, **kwargs: None)
@@ -413,7 +418,11 @@ def test_collect_prepare_no_pull_streams_lines_live(
         lambda **kwargs: log_calls.append(kwargs),
     )
     monkeypatch.setattr(model_scout, "write_scout_groups", lambda groups, **kw: None)
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "UD-Q4_K_XL")
+    monkeypatch.setattr(
+        model_scout,
+        "select_quant_artefact",
+        lambda repo: model_scout.QuantArtefact("UD-Q4_K_XL", None),
+    )
 
     echoed: list[str] = []
     code, lines = model_scout.collect_model_scout_report(
@@ -465,7 +474,11 @@ def test_prepare_pick_pulls_grounds_benchmarks_and_records(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: "Q4_K_M")
+    monkeypatch.setattr(
+        model_scout,
+        "select_quant_artefact",
+        lambda repo: model_scout.QuantArtefact("Q4_K_M", None),
+    )
     monkeypatch.setattr(model_scout, "baseline_model", lambda: "qwen-base")
     monkeypatch.setattr(
         model_scout, "model_present", lambda model, **kwargs: model == "qwen-base"
@@ -537,7 +550,7 @@ def test_prepare_pick_reports_pull_failure(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    monkeypatch.setattr(model_scout, "best_quant", lambda repo: None)
+    monkeypatch.setattr(model_scout, "select_quant_artefact", lambda repo: None)
     monkeypatch.setattr(
         model_scout,
         "run_ollama",
@@ -1140,3 +1153,312 @@ def test_fit_candidate_uses_the_named_budget_constants() -> None:
         _candidate(total=10.0, active=None, is_moe=False), budget
     )
     assert size == round(10.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+
+
+# ---------------------------------------- quant-aware resident weight sizing
+#
+# WEIGHTS_GB_PER_B is a single ~Q4_K_M bytes-per-parameter constant applied
+# regardless of which quant is actually pulled. The HuggingFace tree response
+# already carries the exact size of every file and select_quant_artefact keeps
+# it, so the artefact that will really be downloaded can be priced as itself.
+
+
+def test_exact_artefact_size_overrides_the_global_heuristic() -> None:
+    # 8B at the heuristic is 4.8GB; the measured file says 5.03GB. The
+    # measurement wins, and says so.
+    sizing = model_scout.resolve_weight_sizing(
+        total_b=8.0, quant="Q4_K_M", artefact_bytes=5_030_000_000
+    )
+    assert sizing is not None
+    assert sizing.provenance == "measured-file"
+    assert sizing.gb == 5.03
+    assert sizing.gb != round(8.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+
+
+def test_q8_artefact_is_not_underpriced_as_though_it_were_q4() -> None:
+    # best_quant falls back to `quants[0]`, which can be Q8_0. At 8 bits per
+    # weight a 14B Q8_0 is ~14GB, not the ~8.4GB the Q4-shaped heuristic gives.
+    # Under-pricing is the dangerous direction: it reports a fit that is absent.
+    heuristic = 14.0 * model_scout.WEIGHTS_GB_PER_B
+    sizing = model_scout.resolve_weight_sizing(total_b=14.0, quant="Q8_0")
+    assert sizing is not None
+    assert sizing.provenance == "bpw-table"
+    assert sizing.gb > heuristic
+    assert sizing.gb == round(14.0 * 8.0 / 8.0, 1)
+
+
+def test_a_smaller_quant_never_shrinks_below_the_heuristic() -> None:
+    # Q3_K's 3.4375 bpw would price a 14B at ~6GB, but K-quants keep embedding
+    # and output tensors at higher precision, so the base figure understates the
+    # real file. Missing evidence must not make a model look smaller.
+    heuristic = round(14.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+    sizing = model_scout.resolve_weight_sizing(total_b=14.0, quant="Q3_K_M")
+    assert sizing is not None
+    assert sizing.gb == heuristic
+    assert sizing.provenance == "global-heuristic"
+
+
+def test_missing_size_and_unknown_quant_falls_back_to_the_estimator() -> None:
+    sizing = model_scout.resolve_weight_sizing(total_b=9.0, quant="NOT_A_QUANT")
+    assert sizing is not None
+    assert sizing.provenance == "global-heuristic"
+    assert sizing.gb == round(9.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+    # No parameter count and no measurement is genuinely unknown, not zero.
+    assert model_scout.resolve_weight_sizing(total_b=None, quant="Q4_K_M") is None
+
+
+def test_sizing_is_deterministic_for_identical_inputs() -> None:
+    args = {"total_b": 12.0, "quant": "Q5_K_M", "artefact_bytes": None}
+    first = model_scout.resolve_weight_sizing(**args)
+    assert first == model_scout.resolve_weight_sizing(**args)
+
+
+def test_resident_sizing_ignores_active_parameters_entirely() -> None:
+    # A MoE loads every expert weight. resolve_weight_sizing takes no active
+    # count by construction, so a 30B-A3B and a 30B dense of the same quant
+    # must price identically.
+    moe = model_scout.resolve_weight_sizing(total_b=30.0, quant="Q4_K_M")
+    dense = model_scout.resolve_weight_sizing(total_b=30.0, quant="Q4_K_M")
+    assert moe == dense
+    # Enforced by construction: there is no active-parameter input to pass.
+    params = set(inspect.signature(model_scout.resolve_weight_sizing).parameters)
+    assert params == {"total_b", "quant", "artefact_bytes"}
+    # And the same holds for a measured artefact.
+    measured_moe = model_scout.resolve_weight_sizing(
+        total_b=30.0, quant="Q4_K_M", artefact_bytes=18_560_000_000
+    )
+    measured_dense = model_scout.resolve_weight_sizing(
+        total_b=30.0, quant="Q4_K_M", artefact_bytes=18_560_000_000
+    )
+    assert measured_moe == measured_dense == model_scout.WeightSizing(
+        18.56, "Q4_K_M", "measured-file"
+    )
+
+
+def test_quant_bits_per_weight_handles_real_tags() -> None:
+    bpw = model_scout.quant_bits_per_weight
+    assert bpw("Q8_0") == 8.0
+    assert bpw("Q4_K_M") == 4.5          # K-quant size class strips to the base
+    assert bpw("Q4_K_S") == 4.5
+    assert bpw("UD-Q4_K_XL") == 4.5      # Unsloth dynamic prefix
+    assert bpw("IQ4_XS") == 4.25         # a whole name, not IQ4 + _XS
+    assert bpw("IQ4_NL") == 4.5
+    assert bpw("Q3_K_M") == 3.4375
+    assert bpw("mystery") is None
+    assert bpw(None) is None
+
+
+# ---------------------------------------------- keeping the size already fetched
+
+
+def _tree(*entries: tuple[str, int | None]) -> list[object]:
+    rows: list[object] = []
+    for path, size in entries:
+        row: dict[str, object] = {"path": path, "type": "file"}
+        if size is not None:
+            row["size"] = size
+        rows.append(row)
+    return rows
+
+
+def test_select_quant_artefact_keeps_the_exact_file_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        model_scout,
+        "fetch_hf_tree",
+        lambda repo: _tree(
+            ("m-Q4_K_M.gguf", 5_030_000_000), ("m-Q8_0.gguf", 8_700_000_000)
+        ),
+    )
+    artefact = model_scout.select_quant_artefact("x/y")
+    assert artefact == model_scout.QuantArtefact("Q4_K_M", 5_030_000_000)
+    # The back-compat wrapper still returns just the tag.
+    assert model_scout.best_quant("x/y") == "Q4_K_M"
+
+
+def test_select_quant_artefact_sums_shards(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        model_scout,
+        "fetch_hf_tree",
+        lambda repo: _tree(
+            ("m-Q4_K_M-00001-of-00002.gguf", 10_000_000_000),
+            ("m-Q4_K_M-00002-of-00002.gguf", 8_560_000_000),
+        ),
+    )
+    artefact = model_scout.select_quant_artefact("x/y")
+    assert artefact is not None
+    assert artefact.size_bytes == 18_560_000_000
+
+
+def test_select_quant_artefact_reports_no_size_when_a_shard_lacks_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Summing only the sized shards would under-count, which is the dangerous
+    # direction, so the whole quant reports no size instead.
+    monkeypatch.setattr(
+        model_scout,
+        "fetch_hf_tree",
+        lambda repo: _tree(
+            ("m-Q4_K_M-00001-of-00002.gguf", 10_000_000_000),
+            ("m-Q4_K_M-00002-of-00002.gguf", None),
+        ),
+    )
+    artefact = model_scout.select_quant_artefact("x/y")
+    assert artefact is not None
+    assert artefact.quant == "Q4_K_M"
+    assert artefact.size_bytes is None
+
+
+def test_select_quant_artefact_survives_an_api_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(repo: str) -> list[object]:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", boom)
+    assert model_scout.select_quant_artefact("x/y") is None
+    assert model_scout.best_quant("x/y") is None
+
+
+def _prepare_pick_pick() -> model_scout.Candidate:
+    return model_scout.Candidate(
+        id="unsloth/Big-30B-GGUF",
+        author="unsloth",
+        name="Big-30B",
+        total=30.0,
+        active=None,
+        is_moe=False,
+        kind="general",
+        reasoning=False,
+        family="qwen",
+        parse_warning=None,
+        verdict="Good",
+        size_gb=18.0,
+    )
+
+
+def test_prepare_pick_refuses_a_measured_artefact_that_cannot_be_resident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The scout ranked this at the ~18GB Q4 estimate. The repository actually
+    # offers only Q8_0, and the measured artefact is 32GB - past the usable
+    # memory on a 32GB box. Stop before the download, not at load time.
+    monkeypatch.setattr(
+        model_scout,
+        "select_quant_artefact",
+        lambda repo: model_scout.QuantArtefact("Q8_0", 32_000_000_000),
+    )
+    pulled: list[str] = []
+    monkeypatch.setattr(
+        model_scout,
+        "pull_with_retry",
+        lambda *a, **k: pulled.append("pulled")
+        or CommandResult(("ollama",), 0, "", ""),
+    )
+    said: list[str] = []
+    logged: list[str] = []
+    code = model_scout.prepare_pick(
+        _prepare_pick_pick(),
+        budget=model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=500),
+        state={"prepared": [], "seen": []},
+        say=said.append,
+        log=logged,
+        no_pull=False,
+        stream=False,
+        now=datetime(2026, 8, 29, 12, 0),
+        probe_timeout_sec=5,
+    )
+
+    assert code == 0
+    assert pulled == []  # nothing downloaded
+    assert any("Skipping pull" in line for line in said)
+    assert any("32GB" in line for line in said)
+    assert any("SKIPPED pull" in entry for entry in logged)
+
+
+def test_prepare_pick_reports_the_measured_size_and_still_pulls_when_it_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        model_scout,
+        "select_quant_artefact",
+        lambda repo: model_scout.QuantArtefact("Q4_K_M", 18_560_000_000),
+    )
+    monkeypatch.setattr(
+        model_scout,
+        "pull_with_retry",
+        lambda *a, **k: CommandResult(("ollama",), 1, "", "no"),
+    )
+    said: list[str] = []
+    model_scout.prepare_pick(
+        _prepare_pick_pick(),
+        budget=model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=500),
+        state={"prepared": [], "seen": []},
+        say=said.append,
+        log=[],
+        no_pull=False,
+        stream=False,
+        now=datetime(2026, 8, 29, 12, 0),
+        probe_timeout_sec=5,
+    )
+
+    joined = " | ".join(said)
+    assert "measured" in joined
+    assert "18.6GB" in joined            # format_num renders to one decimal
+    assert "scout estimated 18GB" in joined  # the estimate is shown alongside
+    assert "Skipping pull" not in joined
+    # The underlying figure keeps the full precision the API reported.
+    assert model_scout.resolve_weight_sizing(
+        total_b=30.0, quant="Q4_K_M", artefact_bytes=18_560_000_000
+    ).gb == 18.56
+
+
+def test_prepare_pick_low_disk_guard_runs_before_any_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If there is already not enough disk, do not spend a request learning the
+    # exact size. Also proves the guard's message is still the first line.
+    def must_not_be_called(repo: str) -> None:
+        raise AssertionError("select_quant_artefact called despite low disk")
+
+    monkeypatch.setattr(model_scout, "select_quant_artefact", must_not_be_called)
+    said: list[str] = []
+    code = model_scout.prepare_pick(
+        _prepare_pick_pick(),
+        budget=model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=20),
+        state={"prepared": [], "seen": []},
+        say=said.append,
+        log=[],
+        no_pull=False,
+        stream=False,
+        now=datetime(2026, 8, 29, 12, 0),
+        probe_timeout_sec=5,
+    )
+    assert code == 0
+    assert said[0].startswith("[!] Low disk")
+
+
+def test_discovery_makes_no_per_candidate_tree_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Exact sizing costs one HTTP request per REPO. Doing it during discovery
+    # would mean one per candidate across five authors, so discovery stays on
+    # the parameter-count estimate by design. This pins that.
+    def must_not_be_called(repo: str) -> list[object]:
+        raise AssertionError("fetch_hf_tree called during discovery")
+
+    monkeypatch.setattr(model_scout, "fetch_hf_tree", must_not_be_called)
+    monkeypatch.setattr(
+        model_scout,
+        "fetch_hf_models",
+        lambda author: [
+            {"id": f"{author}/Thing-8B-GGUF", "downloads": 10, "lastModified": ""}
+        ],
+    )
+    rows = model_scout.discover_candidates(
+        budget=model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=100),
+        notes=[],
+        now=datetime(2026, 8, 29, 12, 0),
+    )
+    assert rows  # discovery still works
