@@ -518,20 +518,52 @@ def prepare_pick(
     elif sizing:
         say(f"    artefact size: ~{format_num(sizing.gb)}GB ({sizing.provenance})")
 
-    # The scout ranked this candidate at an estimated size. If the real artefact
-    # cannot be resident at all, stop before the multi-gigabyte download rather
-    # than discovering it at load time.
-    ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
-    if sizing and sizing.provenance == "measured-file" and sizing.gb > ram_ceil:
+    # KV at the context this pick will actually be built with. The scout ranked
+    # it from parameter-count buckets, which cannot see how many KV heads a
+    # model has - a sparse MoE with few KV heads is priced more than twice its
+    # real cost that way. config.json is fetched once, for the selected model
+    # only, and its absence simply keeps the bucket estimate.
+    arch = parse_architecture(fetch_hf_config(repo))
+    kv_gb, kv_provenance = resolve_kv_gb(
+        pick.total or 0.0,
+        ctx=num_ctx,
+        parallel=read_num_parallel(),
+        kv_factor=read_kv_factor(),
+        arch=arch,
+    )
+    ctx_label = f"{num_ctx // 1024}k"
+    if arch:
         say(
-            f"[!] {quant} is {format_num(sizing.gb)}GB, over this machine's "
-            f"~{format_num(ram_ceil)}GB usable memory. Skipping pull."
+            f"    KV@{ctx_label}: {format_num(kv_gb)}GB (measured architecture: "
+            f"{arch.n_layer} layers, {arch.n_head_kv} KV heads)"
         )
-        log.append(
-            f"- SKIPPED pull ({quant} {format_num(sizing.gb)}GB > "
-            f"{format_num(ram_ceil)}GB usable): {pick.id}"
-        )
-        return 0
+        if arch.native_context and num_ctx > arch.native_context:
+            # Requested context is not the same thing as allocated context.
+            say(
+                f"    note: {ctx_label} requested is above this model's native "
+                f"{arch.native_context // 1024}k; the runtime may allocate less."
+            )
+    else:
+        say(f"    KV@{ctx_label}: ~{format_num(kv_gb)}GB ({kv_provenance})")
+
+    # The scout ranked this candidate at an estimated size. If the real artefact
+    # plus its KV reservation cannot be resident at all, stop before the
+    # multi-gigabyte download rather than discovering it at load time.
+    ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
+    if sizing and sizing.provenance == "measured-file":
+        resident = round(sizing.gb + kv_gb, 2)
+        if resident > ram_ceil:
+            say(
+                f"[!] {quant} needs ~{format_num(resident)}GB resident "
+                f"({format_num(sizing.gb)}GB weights + {format_num(kv_gb)}GB "
+                f"KV@{ctx_label}), over this machine's "
+                f"~{format_num(ram_ceil)}GB usable memory. Skipping pull."
+            )
+            log.append(
+                f"- SKIPPED pull ({quant} {format_num(resident)}GB resident > "
+                f"{format_num(ram_ceil)}GB usable): {pick.id}"
+            )
+            return 0
 
     if need_gb and budget.disk_free_gb < need_gb + 12:
         say(
@@ -1113,6 +1145,134 @@ def estimate_kv_gb(
 ) -> float:
     """KV-cache reservation in GB for ``ctx`` tokens across ``parallel`` slots."""
     return round(kv_gb_per_1k(total_b) * (ctx / 1024) * parallel * kv_factor, 2)
+
+
+@dataclass(frozen=True)
+class ArchitectureInfo:
+    """The model-structure fields KV cache size actually depends on.
+
+    Deliberately excludes any parameter count. KV scales with layers, KV heads
+    and head dimension - not with how many parameters a model has, and not with
+    how many of them are active per token. A sparse MoE with few KV heads has a
+    small KV cache however large it is.
+    """
+
+    n_layer: int
+    n_head_kv: int
+    head_dim: int
+    native_context: int | None = None
+
+
+def parse_architecture(config: object) -> ArchitectureInfo | None:
+    """Read an ``ArchitectureInfo`` out of a HuggingFace ``config.json``.
+
+    Returns ``None`` unless every field KV needs is present and sane, so partial
+    or malformed metadata falls back to the bucket estimator rather than
+    producing a confident wrong number.
+    """
+    if not isinstance(config, dict):
+        return None
+
+    def positive_int(*keys: str) -> int | None:
+        for key in keys:
+            value = config.get(key)
+            if isinstance(value, bool):  # bool is an int subclass; not a count
+                continue
+            if isinstance(value, int) and value > 0:
+                return value
+        return None
+
+    n_layer = positive_int("num_hidden_layers", "n_layer")
+    # Multi-head attention omits num_key_value_heads; it then equals the head
+    # count. Absent both, there is nothing to compute from.
+    n_head_kv = positive_int("num_key_value_heads", "num_attention_heads")
+    head_dim = positive_int("head_dim")
+    if head_dim is None:
+        hidden = positive_int("hidden_size", "n_embd")
+        heads = positive_int("num_attention_heads", "n_head")
+        if hidden and heads and hidden % heads == 0:
+            head_dim = hidden // heads
+    if not (n_layer and n_head_kv and head_dim):
+        return None
+    return ArchitectureInfo(
+        n_layer=n_layer,
+        n_head_kv=n_head_kv,
+        head_dim=head_dim,
+        native_context=positive_int("max_position_embeddings"),
+    )
+
+
+def exact_kv_gb(
+    arch: ArchitectureInfo,
+    *,
+    ctx: int,
+    parallel: int,
+    kv_factor: float,
+) -> float:
+    """KV-cache reservation in GiB from the model's real structure.
+
+    The canonical llama.cpp shape, one K cache and one V cache per layer:
+
+        n_layer x 2 x ctx x n_head_kv x head_dim x bytes_per_element x parallel
+
+    ``kv_factor`` carries the runtime's cache dtype relative to f16 (2 bytes),
+    so OLLAMA_KV_CACHE_TYPE=q8_0 halves this exactly as it does for the bucket
+    estimator.
+    """
+    bytes_per_element = 2.0 * kv_factor  # f16 baseline
+    total = (
+        arch.n_layer
+        * 2
+        * max(ctx, 0)
+        * arch.n_head_kv
+        * arch.head_dim
+        * bytes_per_element
+        * max(parallel, 1)
+    )
+    return round(total / GIB, 2)
+
+
+def resolve_kv_gb(
+    total_b: float,
+    *,
+    ctx: int,
+    parallel: int,
+    kv_factor: float,
+    arch: ArchitectureInfo | None = None,
+) -> tuple[float, str]:
+    """KV size and its provenance: exact structure when known, buckets otherwise.
+
+    Never returns zero for a real context: an absent or unusable architecture
+    falls through to the parameter-count buckets, which is today's behaviour.
+    """
+    if arch is not None:
+        return exact_kv_gb(arch, ctx=ctx, parallel=parallel, kv_factor=kv_factor), (
+            "exact-architecture"
+        )
+    return (
+        estimate_kv_gb(total_b, ctx=ctx, parallel=parallel, kv_factor=kv_factor),
+        "param-buckets",
+    )
+
+
+def fetch_hf_config(repo: str) -> object | None:
+    """Fetch a repository's ``config.json``, or ``None`` when it has none.
+
+    One request, and only ever for a model that has already been selected - the
+    same rule as the artefact size. GGUF repositories vary: unsloth's carry a
+    config.json, bartowski's do not, which is exactly why the bucket fallback
+    stays.
+    """
+    request = Request(
+        f"https://huggingface.co/{repo}/resolve/main/config.json",
+        headers={"User-Agent": "localai-model-scout"},
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            parsed: object = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return parsed
 
 
 def read_num_parallel() -> int:
