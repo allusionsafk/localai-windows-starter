@@ -1,39 +1,60 @@
 # Security policy
 
-AFK AI is Friend Beta software. Security and privacy reports are useful now, especially where the installer, local-service boundary, diagnostics, or update path could put a user's machine or data at risk.
+AFK AI is Friend Beta software. Security and privacy reports are welcome,
+especially when the installer, local service boundary, diagnostics, update path,
+or download integrity could put a user's machine or data at risk.
 
-## Report a vulnerability privately
+## Report privately
 
-Use GitHub's private vulnerability reporting flow:
+**Use GitHub private vulnerability reporting:**
 
 https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
 
-Please do **not** put exploit details, credentials, private logs, chat content, documents, `.env` values, tokens, or other sensitive material in a public issue.
+> [!CAUTION]
+> Do not publish exploit details, credentials, private logs, chat content,
+> documents, `.env` values, tokens, cookies, or other sensitive material in a
+> normal GitHub issue.
 
-Useful security reports include problems such as:
+## In scope
 
-- installer or release-integrity checks that can be bypassed;
-- AFK AI services becoming reachable beyond the intended local boundary without an explicit opt-in;
-- credential, secret, prompt, chat, document, or file-content leakage in diagnostics;
-- command injection, unsafe privilege changes, or unexpected system modification;
-- unsafe update or dependency behaviour;
-- a privacy claim that does not match the code's actual network behaviour.
+Useful security reports include:
+
+- bypasses of installer or release integrity checks
+- AFK AI services becoming reachable outside the intended local boundary
+  without explicit opt-in
+- credential, secret, prompt, chat, document, or file-content leakage
+- command injection or unsafe privilege changes
+- unexpected system modification
+- unsafe update or dependency behavior
+- privacy claims that do not match actual network behavior
 
 ## What to include
 
-Provide the smallest reproducible report you can. Helpful details are:
+Please provide the smallest reproducible report you can:
 
-- AFK AI tag, commit, or branch;
-- Windows version and only the hardware details relevant to the problem;
-- exact reproduction steps;
-- expected versus observed behaviour;
-- impact;
-- a sanitised diagnostic excerpt when it is necessary.
+1. AFK AI tag, commit, or branch
+2. Windows version
+3. only the hardware details relevant to the issue
+4. exact reproduction steps
+5. expected behavior
+6. observed behavior
+7. security or privacy impact
+8. a sanitized diagnostic excerpt, only when necessary
 
-Remove usernames, home-directory paths, hostnames, tokens, cookies, API keys, model prompts, chats, documents, and unrelated machine information before sharing material.
+Before sharing logs or screenshots, remove:
 
-## Beta support boundary
+- usernames and home-directory paths
+- hostnames and IP addresses unless they are essential to the report
+- tokens, cookies, API keys, and credentials
+- prompts, chats, and documents
+- unrelated machine information
 
-The current public Friend Beta is `v0.1.7rc1`. The `master` branch can move ahead of that candidate, so reports should identify the version or commit being tested.
+## Friend Beta boundary
 
-For ordinary setup problems, hardware compatibility questions, and non-security bugs, use the repository issue forms and [SUPPORT.md](SUPPORT.md).
+The current public Friend Beta is `v0.1.7rc1`.
+
+`master` can move ahead of that candidate, so every report should identify the
+tag or commit being tested.
+
+For setup problems, hardware compatibility questions, and non-security bugs,
+start with [SUPPORT.md](SUPPORT.md).
