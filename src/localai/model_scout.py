@@ -214,7 +214,13 @@ QUANT_BPW: dict[str, float] = {
 # IQ4_XS are whole names and are matched before any suffix is stripped.
 _QUANT_SIZE_SUFFIXES = ("_XXL", "_XL", "_XS", "_S", "_M", "_L")
 
-GB = 1_000_000_000  # HuggingFace reports file sizes in decimal bytes.
+# Every size in this module is compared against a hardware budget, and every one
+# of those budgets is BINARY: nvidia-smi MiB / 1024, ullTotalPhys / 1024**3, and
+# shutil.disk_usage().free / 1024**3. tiers.json thresholds are the same unit
+# (a nominal 16 GB card reports 16376 MiB -> 16.0). So bytes are converted with
+# 1024**3, not 1e9: a decimal figure would be 7.4% larger than the budget it is
+# checked against, which is the wrong number even though it errs conservatively.
+GIB = 1024**3
 
 
 @dataclass(frozen=True)
@@ -241,6 +247,9 @@ class WeightSizing:
     ``measured-file``     exact bytes of the artefact that will be pulled;
     ``bpw-table``         derived from the quant's bits-per-weight;
     ``global-heuristic``  ``total_params x WEIGHTS_GB_PER_B`` - today's estimate.
+
+    ``gb`` is binary GiB in every case, matching the hardware budgets it is
+    compared against (see GIB).
     """
 
     gb: float
@@ -284,7 +293,7 @@ def resolve_weight_sizing(
     dangerous direction: it reports that a model fits when it does not.
     """
     if artefact_bytes and artefact_bytes > 0:
-        return WeightSizing(round(artefact_bytes / GB, 2), quant, "measured-file")
+        return WeightSizing(round(artefact_bytes / GIB, 2), quant, "measured-file")
     if total_b is None:
         return None
     heuristic = total_b * WEIGHTS_GB_PER_B

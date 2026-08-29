@@ -1171,7 +1171,7 @@ def test_exact_artefact_size_overrides_the_global_heuristic() -> None:
     )
     assert sizing is not None
     assert sizing.provenance == "measured-file"
-    assert sizing.gb == 5.03
+    assert sizing.gb == 4.68  # 5.03e9 bytes in the binary GiB the budgets use
     assert sizing.gb != round(8.0 * model_scout.WEIGHTS_GB_PER_B, 1)
 
 
@@ -1231,7 +1231,7 @@ def test_resident_sizing_ignores_active_parameters_entirely() -> None:
         total_b=30.0, quant="Q4_K_M", artefact_bytes=18_560_000_000
     )
     assert measured_moe == measured_dense == model_scout.WeightSizing(
-        18.56, "Q4_K_M", "measured-file"
+        17.29, "Q4_K_M", "measured-file"
     )
 
 
@@ -1373,7 +1373,7 @@ def test_prepare_pick_refuses_a_measured_artefact_that_cannot_be_resident(
     assert code == 0
     assert pulled == []  # nothing downloaded
     assert any("Skipping pull" in line for line in said)
-    assert any("32GB" in line for line in said)
+    assert any("29.8GB" in line for line in said)  # 32e9 bytes as GiB
     assert any("SKIPPED pull" in entry for entry in logged)
 
 
@@ -1405,13 +1405,13 @@ def test_prepare_pick_reports_the_measured_size_and_still_pulls_when_it_fits(
 
     joined = " | ".join(said)
     assert "measured" in joined
-    assert "18.6GB" in joined            # format_num renders to one decimal
+    assert "17.3GB" in joined            # format_num renders to one decimal
     assert "scout estimated 18GB" in joined  # the estimate is shown alongside
     assert "Skipping pull" not in joined
     # The underlying figure keeps the full precision the API reported.
     assert model_scout.resolve_weight_sizing(
         total_b=30.0, quant="Q4_K_M", artefact_bytes=18_560_000_000
-    ).gb == 18.56
+    ).gb == 17.29
 
 
 def test_prepare_pick_low_disk_guard_runs_before_any_network_call(
@@ -1462,3 +1462,56 @@ def test_discovery_makes_no_per_candidate_tree_request(
         now=datetime(2026, 8, 29, 12, 0),
     )
     assert rows  # discovery still works
+
+
+# ------------------------------------------------------------------- units
+#
+# Every size in model_scout is compared against a hardware budget, and every
+# budget is BINARY: nvidia-smi MiB / 1024, ullTotalPhys / 1024**3,
+# disk_usage().free / 1024**3. Converting artefact bytes with 1e9 instead would
+# make a measured size 7.4% larger than the budget it is checked against.
+
+
+def test_measured_size_uses_the_same_binary_unit_as_the_budgets() -> None:
+    one_gib = 1024**3
+    sizing = model_scout.resolve_weight_sizing(
+        total_b=8.0, quant="Q4_K_M", artefact_bytes=one_gib
+    )
+    assert sizing is not None
+    assert sizing.gb == 1.0
+    # A decimal conversion would report 1.07 for the same bytes.
+    assert sizing.gb != round(one_gib / 1_000_000_000, 2)
+
+
+def test_budget_probes_are_binary_so_the_comparison_is_like_for_like(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # VRAM: nvidia-smi reports MiB. A nominal 16GB card reports 16376 MiB, which
+    # must land on 16.0 to stay in tier S - that is only true in binary units.
+    result = model_scout.CommandResult(("nvidia-smi",), 0, "16376\n", "")
+    monkeypatch.setattr(model_scout, "run_command", lambda *a, **k: result)
+    assert model_scout.get_vram_gb(timeout_sec=5) == 16.0
+
+    # RAM: 32 GiB of physical memory must read as 32.0, not 34.36.
+    monkeypatch.setattr(
+        model_scout, "get_total_physical_memory_bytes", lambda: 32 * 1024**3
+    )
+    assert model_scout.get_ram_gb(timeout_sec=5) == 32.0
+
+
+def test_measured_size_and_ram_ceiling_agree_on_the_boundary() -> None:
+    # The refusal in prepare_pick compares sizing.gb against ram_gb minus the
+    # headroom. Both sides must be the same unit or the boundary is off by 7.4%.
+    budget = model_scout.Budget(ram_gb=32.0, vram_gb=12.0, disk_free_gb=500.0)
+    ram_ceil = budget.ram_gb - model_scout.RAM_HEADROOM_GB
+    exactly_at_ceiling = int(ram_ceil * 1024**3)
+
+    at = model_scout.resolve_weight_sizing(
+        total_b=40.0, quant="Q4_K_M", artefact_bytes=exactly_at_ceiling
+    )
+    over = model_scout.resolve_weight_sizing(
+        total_b=40.0, quant="Q4_K_M", artefact_bytes=exactly_at_ceiling + 2 * 1024**3
+    )
+    assert at is not None and over is not None
+    assert at.gb <= ram_ceil
+    assert over.gb > ram_ceil
