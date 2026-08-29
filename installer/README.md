@@ -1,18 +1,24 @@
 # AFK AI Friend Bootstrapper
 
-A guided, mostly-automatic setup for the current Windows Friend Beta. It stands
-up the local AFK AI stack on a clean-ish Windows machine, matched to the box's
-hardware and to what the user wants it for.
+The Friend Bootstrapper is the guided Windows setup path for AFK AI.
 
-Entry points: `bootstrap.ps1` (tiny pinned stub that fetches a verified copy of
-the repo, ensures PowerShell 7, and hands off) and `Install-LocalAI.ps1` (the
-phase orchestrator — resumable through persisted phase state and explicitly via
-`-Resume`, previewable via `-DryRun`). The root `README.md` covers how a user
-runs them.
+It is designed to take a clean Windows 11 machine from a small, inspectable
+bootstrap script to a local AI workspace matched to the machine's hardware.
 
-## Current flow
+## Entry points
 
-The orchestrator currently runs:
+| File | Role |
+|---|---|
+| `bootstrap.ps1` | Downloads a pinned repository payload, verifies it, ensures PowerShell 7, and hands off |
+| `Install-LocalAI.ps1` | Runs the phase-based installer |
+| `installer-common.ps1` | Shared installer state and helper functions |
+| `installer-state.json` | Local resume state created next to the installer |
+
+The root [README](../README.md) is the user-facing starting point.
+
+## Current installer flow
+
+Current `master` runs these phases:
 
 ```text
 vet
@@ -28,133 +34,174 @@ secure
 self-test
 ```
 
-What those phases do today:
+In plain language:
 
-1. **Vets capability** — GPU/VRAM, CPU, RAM, and free disk, then maps the machine
-   to a capability **tier** (S/A/B/C/CPU) that bounds model size/context.
-2. **Asks intent** — chat / coding / web browsing / voice, with sane defaults.
-3. **Installs Python support** — Python 3.12 and the editable `localai` package
-   where needed.
-4. **Chooses models** — runs the scout against the vetted VRAM budget and stores
-   the tier pick.
-5. **Installs Ollama / checks Docker CLI presence** — installs Docker Desktop
-   when `docker.exe` is absent, then uses a planned resume checkpoint so Docker
-   can complete its own first-launch/reboot work.
-6. **Pulls/builds the selected model**, brings up the compose stack, and seeds
-   the Open WebUI DB.
-7. **Applies network guardrails** — loopback-focused Docker publishes, the
-   physical-adapter firewall block, and the WinNAT port-3000 check/fix guidance.
-8. **Self-tests + hands off** — gates on `localai health`, then prints URLs and
-   start/stop/model guidance.
+1. inspect GPU, VRAM, CPU, RAM, and free disk
+2. ask what the user wants AFK AI for
+3. install or locate Python 3.12
+4. install the editable `localai` package
+5. select models for the detected hardware
+6. install Ollama and check for Docker
+7. pull or build selected models
+8. start the compose services
+9. seed Open WebUI defaults
+10. apply network guardrails
+11. run health checks and print the local URLs
 
-### Known Friend Beta preflight gap
+## Known Friend Beta preflight gap
 
-The current `vet` phase does **not** yet classify firmware virtualization,
-Windows virtualization features, WSL readiness, or Docker-engine health. The
-`ollama-docker` phase primarily checks whether `docker.exe` exists. That means a
-clean-machine run can reach Docker Desktop before Windows exposes the real
-virtualization/WSL blocker, and an installed-but-unhealthy Docker engine is not
-identified early enough.
+Current `master` does not yet prove firmware virtualization, the Windows
+virtualization layer, WSL readiness, and Docker engine health before the earlier
+setup phases run.
 
-This is a known limitation, not a completed fix. A separate implementation-ready
-design is under review in starter PR #3:
+The current `ollama-docker` phase primarily checks whether `docker.exe` exists.
+That is not sufficient proof that the local Docker engine is usable.
 
-https://github.com/allusionsafk/localai-windows-starter/pull/3
+A clean-machine Friend Beta run demonstrated the consequence: substantial setup
+work completed before Docker Desktop exposed the actual Windows virtualization
+blocker.
 
-That future unit will add early classification, precise recoverable actions, a
-live readiness gate before model pulls, and resumable revalidation after a fix
-or reboot.
+The reviewed implementation contract is now documented in:
 
-## Current persistence / resume behaviour
+[`docs/design/virtualization-docker-preflight.md`](../docs/design/virtualization-docker-preflight.md)
 
-`installer-state.json` records completed phase names plus current hardware,
-intent, model selection, and a `pending_reboot` flag. The runner skips completed
-phases on a rerun, which lets the normal double-click path continue work after a
-planned Docker checkpoint.
+That design requires a live environment preflight, precise recovery guidance,
+resume checkpoints, and a second live readiness gate before model downloads.
 
-The current state schema is intentionally simple and has known UX limitations:
-corrupt state currently asks for manual deletion, and `pending_reboot` does not
-record a reason. The preflight design proposes a versioned, reasoned checkpoint
-with live revalidation and safer state recovery; it is not implemented yet.
+> [!IMPORTANT]
+> The design document describes the next runtime behavior. It is not proof that
+> the current Friend Beta tag already implements that behavior.
 
-## Privacy and security boundary
+## Resume state
 
-The installer is designed around these project constraints:
+`installer-state.json` currently records:
 
-- **Local-network guardrails.** Docker-published UI/search/voice ports use
-  loopback. Ollama deliberately binds to `0.0.0.0:11434` so Docker can reach the
-  native Windows service; the later `secure` phase attempts to block AFK AI ports
-  on physical Wi-Fi/Ethernet adapters. The Ollama socket itself is therefore not
-  a loopback-only bind, and a declined/failed firewall step must not be described
-  as if the guardrail succeeded.
-- **No AFK AI cloud account.** Open WebUI's first local signup becomes the local
-  owner/admin.
-- **No blanket Windows-security workaround.** Do not instruct users to disable
-  Defender, Smart App Control, antivirus, or UAC merely to run the beta.
-- **No whole-installer elevation.** System-level firewall/Windows operations may
-  need a bounded UAC step; the normal installer should not simply run everything
-  as Administrator.
-- **Local-first is not offline-only.** Software/model downloads and explicitly
-  enabled web search use the network.
+- completed phases
+- detected hardware
+- selected intent
+- selected models
+- `pending_reboot`
 
-See the root `SECURITY.md` for vulnerability reporting.
+A normal rerun skips phases already recorded as complete.
+
+The current schema is intentionally simple. Known limitations include weak
+corrupt-state recovery and a reboot flag without a structured reason. The
+merged preflight design specifies a versioned, privacy-bounded checkpoint model
+with live revalidation.
+
+Persisted state must remain a resume hint. It must never replace a fresh probe
+of safety-critical environment readiness.
+
+## Privacy and network boundary
+
+The installer follows these product rules:
+
+- Docker-published UI, search, voice, and dashboard endpoints use loopback.
+- Ollama runs natively on Windows and deliberately uses a Docker-reachable host
+  bind so containers can reach it.
+- The later secure phase attempts to apply Windows Firewall guardrails on
+  physical Wi-Fi and Ethernet adapters.
+- A failed or declined firewall action must not be documented as if it
+  succeeded.
+- Open WebUI's first signup is a local account, not an AFK AI cloud account.
+- Software/model downloads and explicitly enabled web search can use the
+  internet.
+- The installer must not tell users to disable Defender, Smart App Control,
+  antivirus, or UAC as a blanket workaround.
+- The whole installer should not run elevated simply because one bounded system
+  action may require UAC.
+
+See [SECURITY.md](../SECURITY.md) for private vulnerability reporting.
 
 ## Building blocks
 
-The orchestrator drives these; each also works standalone:
-
-| Piece | What it is |
+| Piece | Purpose |
 |---|---|
-| `localai vet [--json]` | Probes hardware -> capability tier. `--json` emits one line for the orchestrator. |
-| `localai webui-seed --model <id> --num-ctx <n>` | Seeds Open WebUI's SQLite config (per-model `think`/`num_ctx`/`presence_penalty`, defaults). Refuses loudly on an unexpected DB schema. `--dry-run` prints the plan. |
-| `installer/tiers.json` | Single source of truth for tier thresholds + VRAM math, mirrored by the PowerShell vet phase. Its KV/weights/overhead constants are kept in lockstep with `model_scout` by a test. |
+| `localai vet [--json]` | Inspect hardware and emit a capability tier |
+| `localai model-scout` | Recommend a bounded model/context combination |
+| `localai webui-seed --model <id> --num-ctx <n>` | Seed Open WebUI defaults |
+| `installer/tiers.json` | Shared capability thresholds and memory assumptions |
+
+Each component can be exercised independently of the full installer.
 
 ## Capability tiers
 
-Assumes the installer sets `OLLAMA_KV_CACHE_TYPE=q8_0` host-side (halves KV
-cache), so each tier's ceiling model fits its own VRAM at 32k/16k/8k context:
+The current tier system assumes `OLLAMA_KV_CACHE_TYPE=q8_0` and one model slot.
 
-| Tier | VRAM | Fits (q4 weights, q8_0 KV, 1 slot) | Example |
-|---|---|---|---|
-| S | ≥16 GB | ~14B dense @32k (12.5 GB) | qwen2.5:14b class |
-| A | 12 GB | ~9B dense @32k (9.5 GB) | qwen3.5:9b-32k |
-| B | 8 GB | ~7B dense @16k (7.0 GB) | qwen3.5:4b-16k |
-| C | 4 GB | ~3B dense @8k (3.7 GB) | qwen3.5:2b-8k |
-| CPU | none | small models only — slow, warned honestly | qwen3.5:2b-8k |
+| Tier | VRAM | Broad target |
+|---|---:|---|
+| S | 16 GB+ | larger local models |
+| A | 12 GB | high-quality mid-size models |
+| B | 8 GB | balanced local models |
+| C | 4 GB | compact models |
+| CPU | none | small models with slow generation |
 
-## Publishing (maintainer only)
+A tier is a safety budget, not a promise that every model of a given parameter
+count will fit. Architecture, quantization, context length, KV cache, runtime
+overhead, and CPU offload all matter.
 
-`bootstrap.ps1` is **pinned and fails closed**: it refuses to run unless the
-download is verified against a known commit SHA (git path) or zip SHA256
-(no-git path). After cutting a release tag, fill the two pins so friends get a
-verified download:
+## Dry run and resume
+
+Preview the installer without applying its normal work:
 
 ```powershell
-# 1. Cut and push the tag at the reviewed commit:
+pwsh -File installer\Install-LocalAI.ps1 -DryRun
+```
+
+Resume from existing installer state:
+
+```powershell
+pwsh -File installer\Install-LocalAI.ps1 -Resume
+```
+
+## Publishing a new candidate
+
+`bootstrap.ps1` is pinned and fail-closed. A release operation must update the
+expected tag, commit, and source archive hash together.
+
+Typical maintainer flow:
+
+```powershell
+# 1. Create the reviewed annotated tag.
 git tag -a v0.1.0 -m 'Friend Bootstrapper v0.1.0'
 git push origin v0.1.0
 
-# 2. Get the commit SHA the tag points to:
+# 2. Resolve the payload commit.
 git rev-list -n1 v0.1.0
 
-# 3. Get the SHA256 of the tag's source zip:
+# 3. Hash the exact source archive consumed by bootstrap.
 $u = 'https://github.com/allusionsafk/localai-windows-starter/archive/refs/tags/v0.1.0.zip'
 Invoke-WebRequest $u -OutFile "$env:TEMP\localai-v0.1.0.zip"
 (Get-FileHash "$env:TEMP\localai-v0.1.0.zip" -Algorithm SHA256).Hash
 ```
 
-Set those as the `$ExpectedCommit` and `$ExpectedZipSha256` defaults in
-`bootstrap.ps1` (and bump `$Ref`). For local dev testing before a tag exists,
-run with `-AllowUnverified`.
+Then update `$Ref`, `$ExpectedCommit`, and `$ExpectedZipSha256` in
+`bootstrap.ps1`.
 
-> Chicken-and-egg note: the pins verify the *repo download*, not
-> `bootstrap.ps1` itself, and a commit cannot contain its own SHA — so each
-> release is a two-commit dance: tag commit N, then commit the pins for N on
-> `master`. Friends must therefore always fetch `bootstrap.ps1` from
-> **master** (the root `README.md` one-liner does): the copy *at the tag* has
-> the previous release's pins (or none) and fails closed. The stub itself is
-> trusted via TLS to GitHub; keep it tiny and reviewable.
+For local development before a reviewed tag exists, `-AllowUnverified` is an
+explicit escape hatch. It is not the public distribution path.
 
-> **Before publishing a new tag:** run `localai public-audit --strict` (or
-> `pwsh -File ai-public-audit.ps1 -Strict`) so no machine-specific markers —
-> user paths, hostnames, GPU model, tailnet names — slip into the release.
+### Why the bootstrap comes from `master`
+
+A tag cannot contain a pin to its own future commit identity. The small
+bootstrap stub is therefore fetched from `master`, while the payload it
+downloads is pinned to the reviewed tag and hash.
+
+Keep the bootstrap tiny, inspectable, and boring.
+
+## Before publishing
+
+Run the public boundary audit:
+
+```powershell
+localai public-audit --strict
+```
+
+or:
+
+```powershell
+pwsh -File ai-public-audit.ps1 -Strict
+```
+
+A release should not contain personal paths, hostnames, machine-specific
+identifiers, credentials, or other private development residue.
