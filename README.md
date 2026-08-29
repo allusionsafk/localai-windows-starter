@@ -1,258 +1,262 @@
 # AFK AI for Windows
 
-> **Friend Beta · 0.1.7rc1** — Windows-first, local-first, and still rough around the edges.
+> **Friend Beta 0.1.7rc1** · local-first AI for Windows 11
 
-AFK AI is a local-first, ChatGPT-style AI workspace for Windows. The model runs
-on your own machine through **Ollama**; Open WebUI provides chat, SearXNG provides
-optional web search, and local voice is available through Kokoro.
+AFK AI turns a Windows PC into a private, self-hosted AI workspace built around
+**Ollama**, **Open WebUI**, **SearXNG**, and local voice.
 
-**Model inference and chat history stay on your PC.** Setup/model downloads and
-web searches you explicitly trigger use the internet.
+Your model inference and Open WebUI chat history stay on your machine. Setup,
+model downloads, updates, and optional web search can use the internet.
 
-- **Website:** https://localai-windows-starter-site.allusionsafk.workers.dev/
-- **Source:** https://github.com/allusionsafk/localai-windows-starter
-- **Current beta pin:** `v0.1.7rc1`
+**[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)** ·
+[Support](SUPPORT.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
-> **Windows-first.** The current beta targets Windows 11 with an NVIDIA GPU and
-> Docker Desktop. Model sizes and context lengths are chosen from *your*
-> hardware rather than a fixed reference machine — see
-> [Capability tiers](#capability-tiers).
+## At a glance
 
-## What you get
+| | |
+|---|---|
+| **Status** | Friend Beta `0.1.7rc1` |
+| **Primary target** | Windows 11 with an NVIDIA GPU |
+| **CPU-only fallback** | Supported with smaller models, but slow |
+| **Chat** | Open WebUI at `http://localhost:3000` |
+| **Optional web search** | SearXNG at `http://localhost:8080` |
+| **Model runtime** | Ollama on the Windows host |
+| **License** | MIT |
 
-| Service | Local URL | What it is |
+> [!IMPORTANT]
+> Friend Beta is still proving the clean-machine install path. The current
+> installer does not yet classify every virtualization, WSL, and Docker blocker
+> early enough. If setup reaches one of those blockers, keep the exact error
+> text instead of guessing at system changes.
+
+## Start here
+
+### 1. Download
+
+Open the **[AFK AI website](https://localai-windows-starter-site.allusionsafk.workers.dev/)**
+and choose **Download AFK AI for Windows**.
+
+The website serves a pinned Friend Beta installer only after verifying its
+SHA-256. It does not use GitHub `releases/latest` as the download source.
+
+### 2. Run
+
+Double-click **`Install AFK AI.cmd`** and follow the prompts.
+
+Windows may warn about the unsigned Friend Beta script. You can inspect it in
+Notepad before running it.
+
+> [!NOTE]
+> If Smart App Control blocks the installer without offering a normal run path,
+> do not disable Smart App Control just for the beta. Use the inspectable
+> PowerShell bootstrap path below instead.
+
+### 3. Open chat
+
+When setup completes, open:
+
+```text
+http://localhost:3000
+```
+
+The first Open WebUI account you create becomes the local owner/admin account.
+It is stored in Open WebUI's local database. It is not an AFK AI cloud account.
+
+After installation, the install folder contains:
+
+```text
+Start Local AI.cmd
+Stop Local AI.cmd
+```
+
+## What AFK AI runs
+
+| Service | Local endpoint | Purpose |
 |---|---|---|
-| Open WebUI | http://localhost:3000 | The chat UI (ChatGPT-style) |
-| SearXNG | http://localhost:8080 | Local metasearch front end for optional web search |
-| Kokoro TTS | http://localhost:8880 | Local neural voice talk-back (CPU, no VRAM) |
-| Ollama | http://localhost:11434 | Model server, running natively on the host |
+| **Open WebUI** | `127.0.0.1:3000` | Chat interface |
+| **SearXNG** | `127.0.0.1:8080` | Optional web search |
+| **Control Center** | `127.0.0.1:8765` | Local health and diagnostics |
+| **Kokoro TTS** | `127.0.0.1:8880` | Local neural voice |
+| **Ollama** | host port `11434` | Native Windows model runtime |
 
-Open WebUI and SearXNG run in Docker (`docker-compose.yml`); Ollama runs
-natively on the Windows host so it can use the GPU directly.
+Open WebUI, SearXNG, and the other Docker-published user-facing services use
+loopback endpoints. Ollama runs natively on Windows so it can use the GPU
+directly.
 
-## Privacy and security contract
+## Privacy without vague promises
 
-AFK AI is designed to keep its user-facing services local by default:
+AFK AI is **local-first**, not "the internet is never used."
 
-- **Local-network guardrails.** Docker-published UI, search, and voice ports bind
-  to `127.0.0.1`. Ollama binds to `0.0.0.0:11434` so Docker containers can reach
-  the native Windows service; the installer later attempts to apply a Windows
-  Firewall block for AFK AI ports on physical Wi-Fi/Ethernet adapters. Sharing
-  to your other devices is a separate, explicit opt-in via Tailscale Serve
-  (`ai-anywhere.ps1`). Do not treat the Ollama socket itself as loopback-only.
-- **Local inference.** Ollama serves the model on your own machine; Open WebUI's
-  local database stores the chat UI's account and history on that machine.
-- **Internet use is explicit and bounded.** The installer and model downloads
-  need the internet. If you enable web search, SearXNG sends search queries to
-  external search providers. That is separate from local model inference.
-- **Secrets stay local.** `.env` is gitignored; copy `.env.example` to `.env`
-  and generate your own `SEARXNG_SECRET`.
-- **Third-party startup settings are separate.** AFK AI does not need to run all
-  the time, but Docker Desktop and Ollama each have their own Windows startup
-  preferences. Use AFK AI's Start/Stop controls for the stack itself.
-- **The first Open WebUI account you create becomes the local admin/owner.** It
-  is stored in the local Open WebUI database, not an AFK AI cloud account.
+**Stays local by design**
 
-For vulnerability reporting and the public security boundary, see
-[SECURITY.md](SECURITY.md).
+- model inference through local Ollama
+- Open WebUI's local account and chat database
+- user-facing UI, search, voice, and Control Center endpoints on loopback
+- diagnostics designed to exclude chats, prompts, documents, credentials, and
+  file contents
 
-## Quick start
+**Can use the internet**
 
-### Easiest: download from the AFK AI site
+- software and model downloads
+- updates
+- web searches you explicitly enable
+- optional online integrations you choose
 
-1. Open the [AFK AI website](https://localai-windows-starter-site.allusionsafk.workers.dev/)
-   and choose **Download AFK AI for Windows**. The site serves the installer
-   pinned to the current friend-beta tag after verifying its SHA-256.
-2. Double-click **`Install AFK AI.cmd`**. Windows may show a security prompt for
-   a downloaded unsigned script. You can open the file in Notepad first to
-   inspect it before running it.
-3. Follow the on-screen prompts. The installer checks the machine, installs
-   missing prerequisites where supported, picks a model that fits the machine,
-   and brings up the local stack.
-4. If Windows or Docker reports a virtualization/WSL blocker, stop there rather
-   than guessing at system changes. The cause may be firmware virtualization, a
-   Windows virtualization feature, WSL readiness, Docker state, or a required
-   reboot.
+### Network boundary
 
-> **Current Friend Beta limitation:** virtualization, WSL, and Docker readiness
-> are not classified early enough yet. A clean-machine run can reach Docker
-> Desktop before the installer exposes the actual Windows blocker. The next
-> installer milestone is an early, resumable preflight with one precise recovery
-> action. This is documented as a known limitation, not a completed fix.
+Ollama deliberately uses a Docker-reachable Windows host bind so the containers
+can reach it. The installer later attempts to apply a Windows Firewall guardrail
+for AFK AI ports on physical Wi-Fi and Ethernet adapters.
 
-> If Windows Smart App Control blocks the installer without offering a normal
-> run option, **do not disable Smart App Control just for this beta**. Use the
-> source/PowerShell path below instead so you can inspect exactly what runs.
+Remote access is separate and opt-in. The included Tailscale helper is not
+enabled automatically.
 
-After setup, double-click **`Start Local AI.cmd`** / **`Stop Local AI.cmd`** to
-start and stop the stack. They live in the install folder,
-**`%USERPROFILE%\localai`** (for example,
-`C:\Users\You\localai\Start Local AI.cmd`).
+For the complete public security boundary and private vulnerability reporting,
+see **[SECURITY.md](SECURITY.md)**.
 
-### Guided installer (PowerShell)
+## What the installer does
 
-The Friend Bootstrapper vets your hardware, picks fitting models, brings up the
-local stack with the network guardrails described above, and hands off to health
-checks.
+The guided path is intended to become:
 
-On a machine that doesn't have this repo yet, open **Windows PowerShell** and
-paste these two lines:
+```text
+download
+  -> verify pinned payload
+  -> check the Windows environment
+  -> inspect hardware
+  -> choose a fitting model
+  -> install supported prerequisites
+  -> configure the local stack
+  -> run health checks
+  -> open local chat
+```
+
+Today, the virtualization, WSL, and Docker preflight is still incomplete.
+A real Friend Beta clean-machine run reached Docker Desktop before the actual
+Windows virtualization blocker became clear. The next installer milestone is
+the early, resumable preflight described in
+[`docs/design/virtualization-docker-preflight.md`](docs/design/virtualization-docker-preflight.md).
+
+## Requirements
+
+Current Friend Beta target:
+
+- Windows 11
+- hardware virtualization enabled for the Docker path
+- NVIDIA GPU recommended
+- roughly 40 GB of free disk for a comfortable first install
+- Docker Desktop
+- Ollama for Windows
+- Python 3.12+
+- PowerShell 7, which the bootstrapper can install when missing
+
+CPU-only machines can use smaller models. Expect much slower generation.
+
+## PowerShell bootstrap
+
+If you prefer to inspect and launch the bootstrap directly:
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1 -OutFile "$env:TEMP\localai-bootstrap.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:TEMP\localai-bootstrap.ps1"
 ```
 
-If you already cloned the repo, run it from the checkout instead:
+From an existing checkout:
 
 ```powershell
-# If you already have PowerShell 7:
+# PowerShell 7
 pwsh -ExecutionPolicy Bypass -File installer\bootstrap.ps1
-# On a clean box with only Windows PowerShell 5.1:
+
+# Windows PowerShell 5.1
 powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1
 ```
 
-`bootstrap.ps1` is **pinned and fails closed** — it verifies the download
-against a released tag's commit SHA (git) or zip SHA256 (no-git) before running.
-See `installer/README.md` for the maintainer publishing steps.
+The bootstrap is pinned and fail-closed. It verifies the payload against the
+expected tag commit or source archive hash before running it.
 
-### Manual bring-up
+The `-ExecutionPolicy Bypass` shown here applies to this process invocation. It
+does not permanently change the user's PowerShell execution policy.
 
-```powershell
-# 1. Install the Python control package (Python 3.12+)
-pip install -e .
+## Control CLI
 
-# 2. Configure secrets
-copy .env.example .env
-#    then set SEARXNG_SECRET in .env to a long random string
+AFK AI currently retains the internal `localai` package and command name.
 
-# 3. Start the stack (Ollama native + the compose services)
-localai start
-
-# 4. Check everything is healthy
-localai health
-
-# 5. Open the chat UI
-#    http://localhost:3000  → create your local admin account on first visit
-```
-
-## The `localai` control CLI
-
-A single Python entry point replaces a folder of loose scripts. Highlights:
-
-| Command | What it does |
+| Command | Purpose |
 |---|---|
-| `localai vet [--json]` | Probe GPU/VRAM/CPU/RAM/disk → a capability tier |
-| `localai start` / `localai stop` | Bring the stack up / down |
-| `localai health` | End-to-end health checks (Ollama, services, search) |
-| `localai dashboard` | pywebview Control Center (localhost:8765) |
-| `localai model-scout` | Recommend models that fit your VRAM budget |
-| `localai webui-seed --model <id> --num-ctx <n>` | Seed Open WebUI defaults |
-| `localai warm` / `localai perf` / `localai power` | Warm models, perf + power guards |
-| `localai firewall` | Loopback/firewall guardrails |
-| `localai update` | Update models, images, and Modelfiles |
-| `localai public-audit [--strict]` | Scan for machine-specific markers before sharing |
+| `localai vet [--json]` | Inspect hardware and capability tier |
+| `localai start` | Start the local stack |
+| `localai stop` | Stop the local stack |
+| `localai health` | Check Ollama, services, and search |
+| `localai dashboard` | Open the local Control Center |
+| `localai model-scout` | Recommend models for the machine |
+| `localai warm` | Warm models |
+| `localai perf` | Show performance information |
+| `localai firewall` | Apply local network guardrails |
+| `localai update` | Update supported runtime assets |
+| `localai public-audit --strict` | Scan for machine-specific public leaks |
 
-Run `localai --help` for the full list.
+Run `localai --help` for the complete command list.
 
-## Capability tiers
+## Hardware-aware model fitting
 
-Model choice is bounded by VRAM. The installer assumes
-`OLLAMA_KV_CACHE_TYPE=q8_0` host-side (halves the KV cache), so each tier's
-ceiling model fits its own VRAM:
+The installer does not assume one reference GPU. Model Scout uses the detected
+hardware to select a bounded model/context combination.
 
-| Tier | VRAM | Fits (q4 weights, q8_0 KV, 1 slot) | Example |
-|---|---|---|---|
-| S | ≥16 GB | ~14B dense @32k (~12.5 GB) | qwen2.5:14b class |
-| A | 12 GB | ~9B dense @32k (~9.5 GB) | qwen3.5:9b-32k |
-| B | 8 GB | ~7B dense @16k (~7.0 GB) | qwen3.5:4b-16k |
-| C | 4 GB | ~3B dense @8k (~3.7 GB) | qwen3.5:2b-8k |
-| CPU | none | small models only — slow, warned honestly | qwen3.5:2b-8k |
+Current broad tiers:
 
-**Honest tradeoff:** large context and large models can still spill to CPU when
-VRAM is insufficient, which slows generation. `localai model-scout` shows the
-picks *and* the tradeoffs for your box.
+| Tier | VRAM | Typical target |
+|---|---:|---|
+| S | 16 GB+ | larger local models |
+| A | 12 GB | high-quality mid-size models |
+| B | 8 GB | balanced local models |
+| C | 4 GB | compact models |
+| CPU | none | small models with slow generation |
 
-## Modelfiles
+Actual memory use depends on model architecture, quantization, context length,
+KV cache, runtime overhead, and CPU offload. A model that technically loads can
+still be a poor recommendation if it leaves too little headroom.
 
-The included `*.Modelfile` templates build purpose-tuned Ollama models
-(grounded/anti-hallucination daily drivers, web-navigation models for
-WebBrain, long-context variants). Build one with:
+## Manual development bring-up
+
+For contributors and people who want to work from source:
 
 ```powershell
-ollama create qwen-grounded -f qwen-grounded.Modelfile
+pip install -e .
+copy .env.example .env
+localai start
+localai health
 ```
 
-## Companion scripts (`ai-*.ps1`)
+Set a strong `SEARXNG_SECRET` in `.env` before using the search stack.
 
-PowerShell utilities that pair with the CLI: `ai-health-monitor`, `ai-perf`,
-`ai-power`, `ai-firewall`, `ai-anywhere` (Tailscale Serve), `ai-model-scout`,
-`ai-update`, `ai-warm`, `ai-selftest`, `ai-public-audit`, and more.
+## Documentation
 
-## Docs
+| Document | What it covers |
+|---|---|
+| [Support](SUPPORT.md) | Friend Beta support scope and useful bug reports |
+| [Security](SECURITY.md) | Private vulnerability reporting and privacy boundary |
+| [Contributing](CONTRIBUTING.md) | Contribution scope and test expectations |
+| [Friend Beta notes](docs/releases/0.1.7rc1.md) | Release-candidate truth and known limitations |
+| [Installer guide](installer/README.md) | Bootstrap and installer architecture |
+| [WebBrain guide](docs/webbrain.md) | Browser automation with a local model |
+| [Preflight design](docs/design/virtualization-docker-preflight.md) | Next installer recovery contract |
 
-- [SUPPORT.md](SUPPORT.md) — Friend Beta support scope and what to include in a useful report.
-- [SECURITY.md](SECURITY.md) — private vulnerability reporting and security/privacy scope.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — focused contribution and test expectations.
-- [`docs/releases/0.1.7rc1.md`](docs/releases/0.1.7rc1.md) — current Friend Beta release-note draft and known limitations.
-- `docs/webbrain.md` — reliable multi-step browser automation with a local model.
-- `installer/README.md` — guided installer design, capability tiers, and maintainer publishing steps.
+## Platform direction
 
-## Requirements
+Windows 11 with NVIDIA CUDA is the current supported Friend Beta path.
 
-Current friend-beta target:
-
-- Windows 11
-- NVIDIA GPU recommended (CPU-only works with smaller models, but is slow)
-- Hardware virtualization enabled for Docker Desktop
-- Roughly 40 GB of free disk for a comfortable first install
-- [Ollama](https://ollama.com) (native Windows install)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- Python 3.12+
-- PowerShell 7 (the bootstrapper installs it if missing)
-
-## Platform roadmap
-
-The current installer supports Windows 11 with NVIDIA CUDA. CPU-only systems can
-use the smaller-model tier, but the additional platforms below are planned, not
-supported today.
-
-Apple Silicon is first. After Windows v1, an M4 pilot will test native Ollama
-with Metal acceleration, a core chat path that does not require Docker, and
-model fitting based on unified memory instead of dedicated VRAM. Final model
-tiers for 16, 24, 32, and 48 GB Macs will come from real measurements.
-
-Later validation lanes include:
-
-- Native Windows ARM64 and Linux ARM64 packaging, with clear CPU fallback when
-  an accelerator is unavailable.
-- Windows NPUs from Intel, AMD, and Qualcomm through verified runtime providers.
-  This is an evaluation path, not a claim that the current Ollama stack uses the
-  NPU.
-- NVIDIA DGX Spark as a stretch Linux ARM64 and CUDA target. Its unified memory
-  will be budgeted from measured available capacity, not treated as all usable
-  for a model.
-
-The shared goal is one hardware-capability layer for CUDA, Metal, CPU, and future
-NPU providers. Scout and Prepare will use the machine's architecture, memory
-model, available capacity, runtime support, and benchmarks instead of relying on
-a GPU name alone. No platform will be listed as supported until installation,
-chat, health, backup and restore, approval-based updates, sleep/wake where
-applicable, and clean uninstall pass on real hardware.
+Apple Silicon, Windows ARM64, Linux ARM64, NPUs, AMD acceleration, and other
+backends are evaluation or future-validation work. They are not advertised as
+supported until installation, chat, health, recovery, and uninstall are proven
+on real hardware.
 
 ## Project naming
 
-AFK AI is the product name. The repository and internal package still use
-`localai` in several places for continuity. This project is **not affiliated
-with, or endorsed by, mudler/LocalAI or localai.io**.
+**AFK AI** is the product name.
 
-## Support and security
-
-Normal setup, compatibility, and product bugs belong in the repository's focused
-issue forms. Start with [SUPPORT.md](SUPPORT.md). Security or privacy
-vulnerabilities should use the private reporting path in [SECURITY.md](SECURITY.md),
-not a public issue containing sensitive details.
+The repository and internal Python package still use `localai` for continuity.
+This project is not affiliated with or endorsed by mudler/LocalAI or
+localai.io.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT licensed. See [LICENSE](LICENSE).
