@@ -102,3 +102,48 @@ def test_no_origin_means_no_exemption() -> None:
     kept, allowed = partition_self_references(findings, None)
     assert kept == findings
     assert allowed == 0
+
+
+# The project's website is deployed to Cloudflare Workers, whose hostnames embed
+# the account name as a SUBDOMAIN rather than an owner/repo path. README and
+# SUPPORT.md have to print that URL to send a customer to the download page, so
+# it must not be reported as a private marker.
+SITE_HOST = "localai-windows-starter-site." + OWNER + ".workers.dev"
+
+
+def test_project_workers_dev_site_is_allowed() -> None:
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            "README.md",
+            f"- **Website:** https://{SITE_HOST}/",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert kept == []
+    assert allowed == 1
+
+
+def test_workers_dev_exemption_requires_the_owner_subdomain() -> None:
+    # Someone else's workers.dev deployment is not this project's site.
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            "docs/notes.md",
+            f"{OWNER} tried https://someone-else.other-account.workers.dev/",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert len(kept) == 1
+    assert allowed == 0
+
+
+def test_workers_dev_exemption_does_not_allow_bare_owner_mentions() -> None:
+    # The exemption is anchored to the deployment host; a bare owner mention in
+    # prose still leaks and must still be reported.
+    findings = [
+        make_finding("Origin GitHub owner", "docs/notes.md", f"ask {OWNER} about it")
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert len(kept) == 1
+    assert allowed == 0
