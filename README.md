@@ -39,9 +39,16 @@ and choose **Download AFK AI for Windows**.
 The website serves a pinned Friend Beta installer only after verifying its
 SHA-256. It does not use GitHub `releases/latest` as the download source.
 
+The pinned repository blob remains named **`Install Local AI.cmd`** for source
+and compatibility continuity. The website verifies those exact bytes and saves
+them to the browser as **`Install AFK AI.cmd`**, which is the customer-facing
+product filename. If you cloned this repository instead of using the website,
+run the source file under its repository name.
+
 ### 2. Run
 
-Double-click **`Install AFK AI.cmd`** and follow the prompts.
+If you downloaded from the website, double-click **`Install AFK AI.cmd`** and
+follow the prompts.
 
 Windows may warn about the unsigned Friend Beta script. You can inspect it in
 Notepad before running it.
@@ -232,6 +239,7 @@ Set a strong `SEARXNG_SECRET` in `.env` before using the search stack.
 
 | Document | What it covers |
 |---|---|
+| [Documentation index](docs/README.md) | End-user, release, design, and engineering-document hierarchy |
 | [Support](SUPPORT.md) | Friend Beta support scope and useful bug reports |
 | [Security](SECURITY.md) | Private vulnerability reporting and privacy boundary |
 | [Contributing](CONTRIBUTING.md) | Contribution scope and test expectations |
