@@ -51,6 +51,10 @@ FALLBACK_BASELINE = "qwen3.6-35b-a3b-grounded"
 # Context a grounded wrapper bakes when no category ctx is given. Prepared tags
 # at other sizes carry a "-NNk" suffix so warm/UI stay coherent (constraint #2).
 DEFAULT_GROUNDED_CTX = 8192
+# Only these provisional category positions may trigger per-repository
+# enrichment. Six categories therefore cap the union at 18 unique finalists.
+FINALISTS_PER_CATEGORY = 3
+MAX_ENRICHED_FINALISTS = FINALISTS_PER_CATEGORY * len(CATEGORIES)
 
 QUANT_PREFERENCE = (
     "Q4_K_M",
@@ -236,6 +240,12 @@ class QuantArtefact:
 
     quant: str
     size_bytes: int | None
+    # A filename can identify the tensor encoding but cannot establish whether
+    # the weights came from PTQ, QAT, native low precision, or publisher
+    # training. Do not infer origin from ``quant``.
+    quant_origin: str = "unverified"
+    origin_provenance: str = "filename-only"
+    effective_bpw: float | None = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +337,14 @@ class Candidate:
     size_gb: float | None = None
     fit_why: str = ""
     score: float = 0
+    fit_stage: str = "provisional"
+    fit_confidence: str = "provisional"
+    residency: str = "unverified"
+    weight_provenance: str = "global-heuristic"
+    kv_provenance: str = "param-buckets"
+    runtime_support: str = "unverified"
+    runtime_provenance: str = "not-checked"
+    evidence: CandidateEvidence | None = None
 
 
 def collect_model_scout_report(
@@ -385,7 +403,9 @@ def collect_model_scout_report(
     for message in notes:
         say(f"    {message}")
 
-    groups = collect_scout_groups(budget, candidates)
+    provisional = collect_provisional_groups(budget, candidates)
+    final_ranking = collect_final_groups(budget, provisional)
+    groups = final_ranking.groups
     for category_def in CATEGORIES:
         result = groups[category_def.id]
         say("")
@@ -403,7 +423,7 @@ def collect_model_scout_report(
             extra = len(result.dropped) - len(shown)
             suffix = f" (+{extra} more)" if extra > 0 else ""
             say(f"  dropped {len(result.dropped)} for VRAM: {joined}{suffix}")
-    write_scout_groups(groups, now=stamp)
+    write_scout_groups(final_ranking, now=stamp)
 
     exit_code = 0
     prepare_log: list[str] = []
@@ -463,10 +483,14 @@ def _category_ids() -> str:
 def _say_pick(say: Callable[[str], None], prefix: str, pick: Candidate) -> None:
     tag = " [thinking]" if pick.reasoning else ""
     curated = " (curated)" if pick.author == "curated" else ""
+    evidence = (
+        f" [{pick.fit_stage}/{pick.fit_confidence}; "
+        f"runtime {pick.runtime_support}]"
+    )
     size = "?" if pick.size_gb is None else format_num(pick.size_gb)
     say(
         f"  {prefix} {pick.name:<40} {pick.verdict:<6} "
-        f"~{size}GB  score {format_num(pick.score)}{curated}{tag}"
+        f"~{size}GB  score {format_num(pick.score)}{evidence}{curated}{tag}"
     )
 
 
@@ -495,16 +519,22 @@ def prepare_pick(
         return 0
 
     repo = pick.id
-    # The scout's verdict came from a parameter-count estimate. This is the
-    # first point at which the exact bytes of the file that will actually be
-    # pulled are known, and the tree fetch behind it already happens here.
-    artefact = select_quant_artefact(repo)
-    quant = (artefact.quant if artefact else None) or "Q4_K_M"
-    sizing = resolve_weight_sizing(
-        total_b=pick.total,
-        quant=quant,
-        artefact_bytes=artefact.size_bytes if artefact else None,
+    # Final Scout picks already carry the tree/config results. Legacy or manual
+    # callers without evidence retain the old on-demand resolution path.
+    resolved = pick.evidence
+    artefact = (
+        resolved.artefact
+        if resolved is not None
+        else select_quant_artefact(repo)
     )
+    quant = (artefact.quant if artefact else None) or "Q4_K_M"
+    sizing = resolved.weights if resolved is not None else None
+    if sizing is None:
+        sizing = resolve_weight_sizing(
+            total_b=pick.total,
+            quant=quant,
+            artefact_bytes=artefact.size_bytes if artefact else None,
+        )
     # Never let a missing measurement look smaller than the scout's own estimate.
     need_gb = max(sizing.gb if sizing else 0.0, pick.size_gb or 0.0)
 
@@ -523,7 +553,11 @@ def prepare_pick(
     # model has - a sparse MoE with few KV heads is priced more than twice its
     # real cost that way. config.json is fetched once, for the selected model
     # only, and its absence simply keeps the bucket estimate.
-    arch = parse_architecture(fetch_hf_config(repo))
+    arch = (
+        resolved.architecture
+        if resolved is not None
+        else parse_architecture(fetch_hf_config(repo))
+    )
     kv_gb, kv_provenance = resolve_kv_gb(
         pick.total or 0.0,
         ctx=num_ctx,
@@ -782,7 +816,7 @@ def select_quant_artefact(repo: str) -> QuantArtefact | None:
     """
     try:
         tree = fetch_hf_tree(repo)
-    except OSError:
+    except (OSError, ValueError):
         return None
     quants: list[str] = []
     sizes: dict[str, int] = {}
@@ -793,17 +827,23 @@ def select_quant_artefact(repo: str) -> QuantArtefact | None:
         path = str(entry.get("path") or "")
         if not re.search(r"(?i)\.gguf$", path):
             continue
-        match = re.search(r"(?i)(UD-)?(I?Q\d[0-9A-Z_]*)", path)
-        if not match:
+        # Keep this deliberately narrow: these are tensor-type tags that affect
+        # the selected artefact's resident bytes. They say nothing about PTQ,
+        # QAT, native-low-precision, or publisher/training provenance.
+        matches = re.findall(
+            r"(?i)(?:UD-)?I?Q\d[0-9A-Z_]*|MXFP4|NVFP4|FP8|BF16|F16",
+            path,
+        )
+        if not matches:
             continue
-        quant = match.group(0)
-        if quant not in quants:
-            quants.append(quant)
-        size = entry.get("size")
-        if isinstance(size, int) and size > 0:
-            sizes[quant] = sizes.get(quant, 0) + size
-        else:
-            unsized.add(quant)
+        for quant in matches:
+            if quant not in quants:
+                quants.append(quant)
+            size = entry.get("size")
+            if isinstance(size, int) and size > 0:
+                sizes[quant] = sizes.get(quant, 0) + size
+            else:
+                unsized.add(quant)
 
     def artefact(quant: str) -> QuantArtefact:
         # A shard with no size would silently under-count the total, so a quant
@@ -1163,6 +1203,17 @@ class ArchitectureInfo:
     native_context: int | None = None
 
 
+@dataclass(frozen=True)
+class CandidateEvidence:
+    """Per-repository evidence resolved once for final category fitting."""
+
+    artefact: QuantArtefact | None
+    weights: WeightSizing | None
+    architecture: ArchitectureInfo | None
+    runtime_support: str = "unverified"
+    runtime_provenance: str = "no-positive-runtime-evidence"
+
+
 def parse_architecture(config: object) -> ArchitectureInfo | None:
     """Read an ``ArchitectureInfo`` out of a HuggingFace ``config.json``.
 
@@ -1275,6 +1326,28 @@ def fetch_hf_config(repo: str) -> object | None:
     return parsed
 
 
+def enrich_candidate(candidate: Candidate) -> CandidateEvidence:
+    """Resolve the two existing remote evidence sources for one finalist.
+
+    A successful GGUF/config lookup is sizing evidence, not proof that the
+    installed runtime supports the architecture, template, parser, projector,
+    or backend. Runtime support therefore remains unverified unless a future
+    positive compatibility source supplies a different status.
+    """
+    artefact = select_quant_artefact(candidate.id)
+    sizing = resolve_weight_sizing(
+        total_b=candidate.total,
+        quant=artefact.quant if artefact else None,
+        artefact_bytes=artefact.size_bytes if artefact else None,
+    )
+    architecture = parse_architecture(fetch_hf_config(candidate.id))
+    return CandidateEvidence(
+        artefact=artefact,
+        weights=sizing,
+        architecture=architecture,
+    )
+
+
 def read_num_parallel() -> int:
     """Ollama parallel-request slots (OLLAMA_NUM_PARALLEL); default 1 on this box."""
     try:
@@ -1292,12 +1365,19 @@ def read_kv_factor() -> float:
 
 @dataclass(frozen=True)
 class FitEstimate:
-    """Category-aware VRAM verdict: weights + KV(ctx) against the budget."""
+    """Category-aware verdict with fit stage, residency, and provenance."""
 
     verdict: str
     weights_gb: float
     kv_gb: float
     why: str
+    stage: str = "provisional"
+    confidence: str = "provisional"
+    residency: str = "unverified"
+    weight_provenance: str = "global-heuristic"
+    kv_provenance: str = "param-buckets"
+    runtime_support: str = "unverified"
+    runtime_provenance: str = "not-checked"
 
 
 def category_fit(
@@ -1307,6 +1387,8 @@ def category_fit(
     ctx: int,
     parallel: int,
     kv_factor: float,
+    evidence: CandidateEvidence | None = None,
+    final: bool = False,
 ) -> FitEstimate:
     """Fit a candidate at a category's target context, counting KV cache.
 
@@ -1315,24 +1397,93 @@ def category_fit(
     model that fits at 8k but spills at 32k is reported honestly.
     """
     ctx_label = f"{ctx // 1024}k"
+    stage = "final" if final else "provisional"
+    runtime_support = "unverified"
+    runtime_provenance = "not-checked"
+    if final and evidence is not None:
+        runtime_provenance = evidence.runtime_provenance
+        if evidence.runtime_support == "unsupported" and runtime_provenance in {
+            "",
+            "not-checked",
+            "no-positive-runtime-evidence",
+        }:
+            # A label without positive evidence is still absence of evidence.
+            runtime_support = "unverified"
+        elif evidence.runtime_support in {"supported", "unsupported", "unverified"}:
+            runtime_support = evidence.runtime_support
+
     if candidate.total is None:
         return FitEstimate(
-            "Unknown", 0.0, 0.0, candidate.parse_warning or "WARN: size not in name"
+            "Unknown",
+            0.0,
+            0.0,
+            candidate.parse_warning or "WARN: size not in name",
+            stage=stage,
+            confidence="unverified" if final else "provisional",
+            residency="unverified",
+            runtime_support=runtime_support,
+            runtime_provenance=runtime_provenance,
         )
-    weights = round(candidate.total * WEIGHTS_GB_PER_B, 1)
-    kv = estimate_kv_gb(
-        candidate.total, ctx=ctx, parallel=parallel, kv_factor=kv_factor
+    sizing = evidence.weights if final and evidence is not None else None
+    if sizing is None:
+        sizing = resolve_weight_sizing(total_b=candidate.total)
+    weights = sizing.gb if sizing is not None else 0.0
+    weight_provenance = sizing.provenance if sizing else "unverified"
+    architecture = evidence.architecture if final and evidence is not None else None
+    kv, kv_provenance = resolve_kv_gb(
+        candidate.total,
+        ctx=ctx,
+        parallel=parallel,
+        kv_factor=kv_factor,
+        arch=architecture,
     )
+    confidence = "provisional"
+    if final:
+        confidence = (
+            "exact"
+            if weight_provenance == "measured-file"
+            and kv_provenance == "exact-architecture"
+            else "fallback"
+        )
     vram_usable = budget.vram_gb - VRAM_OVERHEAD_GB
     ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
     demand = round(weights + kv, 2)
+
+    def result(verdict: str, why: str, residency: str) -> FitEstimate:
+        if final:
+            why += (
+                f" [final; {weight_provenance}; {kv_provenance}; "
+                f"runtime {runtime_support}]"
+            )
+        return FitEstimate(
+            verdict,
+            weights,
+            kv,
+            why,
+            stage=stage,
+            confidence=confidence,
+            residency=residency,
+            weight_provenance=weight_provenance,
+            kv_provenance=kv_provenance,
+            runtime_support=runtime_support,
+            runtime_provenance=runtime_provenance,
+        )
+
+    if runtime_support == "unsupported":
+        return result(
+            "Unsupported",
+            f"runtime incompatibility proven by {runtime_provenance}",
+            "unsupported",
+        )
 
     # All expert weights must fit RAM+VRAM even for MoE (only the active experts
     # compute per token, but the whole model is resident), so the RAM ceiling
     # gates MoE and dense alike - checked before the MoE speed verdict.
     if weights > ram_ceil:
-        return FitEstimate(
-            "TooBig", weights, kv, f"~{format_num(weights)}GB weights > RAM budget"
+        return result(
+            "TooBig",
+            f"~{format_num(weights)}GB weights > RAM budget",
+            "not-loadable",
         )
 
     # "Good" means one thing on every path: weights + KV are resident in VRAM.
@@ -1349,12 +1500,11 @@ def category_fit(
         )
 
     if demand <= vram_usable:
-        return FitEstimate(
+        return result(
             "Good",
-            weights,
-            kv,
             f"{moe_detail}~{format_num(weights)}GB + {format_num(kv)}GB "
             f"KV@{ctx_label} fits {format_num(budget.vram_gb)}GB VRAM",
+            "full-gpu",
         )
     if demand <= ram_ceil:
         # Past this point the model spills to CPU. A low-active MoE reads far
@@ -1362,26 +1512,23 @@ def category_fit(
         # the offload is genuinely cheaper - "OK" outranks dense's "Tight" in
         # score_candidate. It is still not "Good": it does not fit VRAM.
         if candidate.is_moe and candidate.active and candidate.active <= 6:
-            return FitEstimate(
+            return result(
                 "OK",
-                weights,
-                kv,
                 f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
                 "spills to CPU, but few active weights = tolerable",
+                "host-loadable",
             )
-        return FitEstimate(
+        return result(
             "Tight",
-            weights,
-            kv,
             f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
             "spills to CPU = slower",
+            "host-loadable",
         )
-    return FitEstimate(
+    return result(
         "Poor",
-        weights,
-        kv,
         f"{moe_detail}~{format_num(demand)}GB (weights+KV@{ctx_label}) "
         "= heavy CPU offload",
+        "non-interactive",
     )
 
 
@@ -1461,7 +1608,7 @@ def score_for_category(
 
 # Verdicts we treat as VRAM-infeasible for a best-pick: too big for RAM, size
 # unknown, or usable only via heavy CPU offload. "Tight" (minor spill) stays.
-_INFEASIBLE_VERDICTS = frozenset({"TooBig", "Unknown", "Poor"})
+_INFEASIBLE_VERDICTS = frozenset({"TooBig", "Unknown", "Poor", "Unsupported"})
 
 
 @dataclass(frozen=True)
@@ -1473,6 +1620,20 @@ class CategoryResult:
     runners_up: tuple[Candidate, ...]
     why: str
     dropped: tuple[tuple[str, str], ...]  # (model name, VRAM-drop reason)
+
+
+@dataclass(frozen=True)
+class ProvisionalRanking:
+    """Internal cheap ranking. Public serializers intentionally reject it."""
+
+    groups: dict[str, CategoryResult]
+
+
+@dataclass(frozen=True)
+class FinalRanking:
+    """Enriched category ranking safe for CLI, cache, and dashboard output."""
+
+    groups: dict[str, CategoryResult]
 
 
 def _curated_candidate(tag: str) -> Candidate:
@@ -1494,6 +1655,7 @@ def collect_scout_groups(
     *,
     parallel: int | None = None,
     kv_factor: float | None = None,
+    final: bool = False,
 ) -> dict[str, CategoryResult]:
     """Group candidates into a best pick + runners-up per task category.
 
@@ -1517,12 +1679,27 @@ def collect_scout_groups(
             if key in seen:
                 continue
             curated = candidate.author == "curated"
+            candidate_evidence = candidate.evidence if final else None
+            if final and candidate_evidence is None:
+                candidate_evidence = CandidateEvidence(
+                    artefact=None,
+                    weights=resolve_weight_sizing(total_b=candidate.total),
+                    architecture=None,
+                    runtime_support="unverified",
+                    runtime_provenance=(
+                        "curated-without-remote-evidence"
+                        if curated
+                        else "missing-finalist-evidence"
+                    ),
+                )
             fit = category_fit(
                 candidate,
                 budget,
                 ctx=category.target_ctx,
                 parallel=slots,
                 kv_factor=factor,
+                evidence=candidate_evidence,
+                final=final,
             )
             if fit.verdict in _INFEASIBLE_VERDICTS:
                 if not curated:
@@ -1533,6 +1710,8 @@ def collect_scout_groups(
                     fit,
                     verdict="OK",
                     why=f"curated seed (assumed to fit {category.target_ctx // 1024}k)",
+                    confidence="unverified" if final else fit.confidence,
+                    residency="unverified" if final else fit.residency,
                 )
             seen.add(key)
             scored.append(
@@ -1542,6 +1721,14 @@ def collect_scout_groups(
                     verdict=fit.verdict,
                     size_gb=round(fit.weights_gb + fit.kv_gb, 1),
                     fit_why=fit.why,
+                    fit_stage=fit.stage,
+                    fit_confidence=fit.confidence,
+                    residency=fit.residency,
+                    weight_provenance=fit.weight_provenance,
+                    kv_provenance=fit.kv_provenance,
+                    runtime_support=fit.runtime_support,
+                    runtime_provenance=fit.runtime_provenance,
+                    evidence=candidate_evidence,
                 )
             )
         scored.sort(key=lambda item: item.score, reverse=True)
@@ -1558,6 +1745,81 @@ def collect_scout_groups(
     return results
 
 
+def collect_provisional_groups(
+    budget: Budget,
+    candidates: list[Candidate],
+    *,
+    parallel: int | None = None,
+    kv_factor: float | None = None,
+) -> ProvisionalRanking:
+    """Build the cheap internal ranking used only to select finalists."""
+    return ProvisionalRanking(
+        collect_scout_groups(
+            budget,
+            candidates,
+            parallel=parallel,
+            kv_factor=kv_factor,
+            final=False,
+        )
+    )
+
+
+def select_bounded_finalists(
+    provisional: ProvisionalRanking,
+) -> tuple[Candidate, ...]:
+    """Union and repo-dedupe the top three candidates from every category."""
+    finalists: list[Candidate] = []
+    seen: set[str] = set()
+    for category in CATEGORIES:
+        result = provisional.groups[category.id]
+        for candidate in (result.top, *result.runners_up):
+            if candidate is None or candidate.author == "curated":
+                continue
+            if candidate.id in seen:
+                continue
+            seen.add(candidate.id)
+            finalists.append(candidate)
+    return tuple(finalists[:MAX_ENRICHED_FINALISTS])
+
+
+def enrich_finalists(finalists: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+    """Enrich each unique bounded finalist once within this scout execution."""
+    enriched: list[Candidate] = []
+    seen: set[str] = set()
+    for candidate in finalists[:MAX_ENRICHED_FINALISTS]:
+        if candidate.id in seen:
+            continue
+        seen.add(candidate.id)
+        enriched.append(
+            replace(
+                candidate,
+                evidence=enrich_candidate(candidate),
+                fit_stage="final",
+            )
+        )
+    return tuple(enriched)
+
+
+def collect_final_groups(
+    budget: Budget,
+    provisional: ProvisionalRanking,
+    *,
+    parallel: int | None = None,
+    kv_factor: float | None = None,
+) -> FinalRanking:
+    """Enrich the bounded union, recompute final fit, and rerank every category."""
+    finalists = enrich_finalists(select_bounded_finalists(provisional))
+    return FinalRanking(
+        collect_scout_groups(
+            budget,
+            list(finalists),
+            parallel=parallel,
+            kv_factor=kv_factor,
+            final=True,
+        )
+    )
+
+
 def _candidate_to_dict(candidate: Candidate | None) -> dict[str, object] | None:
     if candidate is None:
         return None
@@ -1572,11 +1834,35 @@ def _candidate_to_dict(candidate: Candidate | None) -> dict[str, object] | None:
         "downloads": candidate.downloads,
         "family": candidate.family,
         "why": candidate.fit_why,
+        "fitStage": candidate.fit_stage,
+        "fitConfidence": candidate.fit_confidence,
+        "residency": candidate.residency,
+        "weightProvenance": candidate.weight_provenance,
+        "kvProvenance": candidate.kv_provenance,
+        "runtimeSupport": candidate.runtime_support,
+        "runtimeProvenance": candidate.runtime_provenance,
+        "tensorType": (
+            candidate.evidence.artefact.quant
+            if candidate.evidence and candidate.evidence.artefact
+            else None
+        ),
+        "quantOrigin": (
+            candidate.evidence.artefact.quant_origin
+            if candidate.evidence and candidate.evidence.artefact
+            else "unverified"
+        ),
     }
 
 
-def groups_to_dict(groups: dict[str, CategoryResult]) -> dict[str, object]:
-    """JSON-able form of the grouped report (for the cache + dashboard)."""
+def groups_to_dict(ranking: FinalRanking | ProvisionalRanking) -> dict[str, object]:
+    """JSON-able final report; provisional rankings cannot cross this boundary."""
+    if isinstance(ranking, ProvisionalRanking):
+        raise ValueError("provisional ranking cannot be serialized as final")
+    groups = ranking.groups
+    for result in groups.values():
+        for candidate in (result.top, *result.runners_up):
+            if candidate is not None and candidate.fit_stage != "final":
+                raise ValueError("final ranking contains a non-final-stage candidate")
     return {
         cid: {
             "category": result.category,
@@ -1591,13 +1877,14 @@ def groups_to_dict(groups: dict[str, CategoryResult]) -> dict[str, object]:
     }
 
 
-def write_scout_groups(groups: dict[str, CategoryResult], *, now: datetime) -> None:
+def write_scout_groups(ranking: FinalRanking, *, now: datetime) -> None:
     """Persist the grouped report the dashboard reads (logs/model-scout-groups.json)."""
     path = repo_path("logs", "model-scout-groups.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated": now.strftime("%Y-%m-%d %H:%M"),
-        "groups": groups_to_dict(groups),
+        "fitStage": "final",
+        "groups": groups_to_dict(ranking),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -1611,7 +1898,11 @@ def read_scout_groups() -> dict[str, object] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("fitStage") != "final":
+        # Pre-final-fit caches contain provisional verdicts. Never let an old
+        # ``Good`` regain authority merely because the dashboard started first.
+        return None
+    return data
 
 
 def fit_candidate(
@@ -1747,7 +2038,11 @@ def write_model_scout_log(
         runners = ", ".join(runner.name for runner in result.runners_up)
         lines.append(
             f"- **{category.label}**: {top.name} | fit:{top.verdict} ~{size}GB | "
-            f"score:{format_num(top.score)}{tag}"
+            f"score:{format_num(top.score)}{tag} | "
+            f"stage:{top.fit_stage}/{top.fit_confidence} | "
+            f"residency:{top.residency} | "
+            f"weights:{top.weight_provenance} | kv:{top.kv_provenance} | "
+            f"runtime:{top.runtime_support}"
             + (f" | runners-up: {runners}" if runners else "")
         )
         if result.dropped:

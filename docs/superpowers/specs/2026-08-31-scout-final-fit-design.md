@@ -25,7 +25,7 @@ The scout will have two structurally distinct stages:
 3. The six category shortlists are unioned and de-duplicated by repository,
    yielding at most 18 remote finalists regardless of discovery size.
 4. Each unique finalist is enriched once with the existing GGUF tree request
-   and the existing config request. The in-run evidence map is keyed by repo.
+   and existing config request, then carries that evidence for the rest of the run.
 5. Categories are rebuilt only from finalists, using resolved evidence, and are
    reranked without privileging the provisional winner.
 6. Only the final groups are printed, logged, cached, and sent to the dashboard.
@@ -63,7 +63,7 @@ support for CLI/dashboard transparency.
 - recommendation verdict (`Good`, `OK`, `Tight`, `Poor`, `TooBig`, `Unknown`,
   or `Unsupported`);
 - residency (`full-gpu`, `partial-offload`, `host-loadable`,
-  `non-interactive`, `unsupported`, or `unverified`);
+  `non-interactive`, `not-loadable`, `unsupported`, or `unverified`);
 - fit stage/confidence and weight/KV/runtime provenance.
 
 Final `Good` means weights plus KV fit usable VRAM at the category context.
