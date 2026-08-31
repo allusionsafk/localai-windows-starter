@@ -223,6 +223,18 @@ Assert-Equal -Case 'firmware ok + VirtualMachinePlatform missing -> WINDOWS_VIRT
             PendingReboot = $false; Queried = $true; Error = $null }
     })).WindowsVirtualization.Status
 
+$healthyNonWslBackend = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    WindowsVirtualization = [pscustomobject]@{ HypervisorPresent = $true
+        Features = @{ 'VirtualMachinePlatform' = 'Enabled'; 'Microsoft-Windows-Subsystem-Linux' = 'Disabled' }
+        PendingReboot = $false; Queried = $true; Error = $null }
+    Wsl = [pscustomobject]@{ CommandFound = $false; VersionExit = $null; VersionText = ''
+        TimedOut = $false; Error = $null }
+})
+Assert-Equal -Case 'healthy local Linux Docker makes a disabled WSL feature non-blocking' `
+    -Expected 'READY' -Actual $healthyNonWslBackend.WindowsVirtualization.Status
+Assert-Equal -Case 'healthy local Linux Docker + disabled WSL feature -> overall READY' `
+    -Expected 'READY' -Actual $healthyNonWslBackend.Overall
+
 Assert-Equal -Case 'features present + hypervisor not launched -> WINDOWS_HYPERVISOR_NOT_RUNNING' `
     -Expected 'WINDOWS_HYPERVISOR_NOT_RUNNING' -Actual (Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
         WindowsVirtualization = [pscustomobject]@{ HypervisorPresent = $false
@@ -253,6 +265,20 @@ Assert-Equal -Case 'Windows feature query unavailable -> layer UNKNOWN' `
         WindowsVirtualization = [pscustomobject]@{ HypervisorPresent = $null; Features = @{}
             PendingReboot = $null; Queried = $false; Error = 'DISM unavailable' }
     })).WindowsVirtualization.Status
+
+$unknownFeaturesWithoutHypervisor = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    WindowsVirtualization = [pscustomobject]@{ HypervisorPresent = $false; Features = @{}
+        PendingReboot = $null; Queried = $true; Error = 'No usable optional-feature evidence' }
+    Docker = (New-DockerAbsent)
+})
+Assert-Equal -Case 'empty feature evidence + HypervisorPresent false -> Windows virtualization UNKNOWN' `
+    -Expected 'UNKNOWN' -Actual $unknownFeaturesWithoutHypervisor.WindowsVirtualization.Status
+Assert-Equal -Case 'empty feature evidence + HypervisorPresent false + unhealthy Docker -> UNKNOWN_BLOCKER' `
+    -Expected 'UNKNOWN_BLOCKER' -Actual $unknownFeaturesWithoutHypervisor.Overall
+Assert-Equal -Case 'empty feature evidence preserves the Windows virtualization UNKNOWN reason' `
+    -Expected 'WINDOWS_VIRTUALIZATION_UNKNOWN' -Actual $unknownFeaturesWithoutHypervisor.Reason
+Assert-Equal -Case 'empty feature evidence preserves the stable UNKNOWN reason code' `
+    -Expected 'PREFLIGHT-UNKNOWN' -Actual $unknownFeaturesWithoutHypervisor.Code
 
 Assert-Equal -Case 'Windows layer UNKNOWN but healthy local engine proves the backend -> READY' `
     -Expected 'READY' -Actual (Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
@@ -511,8 +537,8 @@ Assert-True -Case 'checkpoint records only the endpoint KIND, never the remote a
 # points - so the kind reported is the DOCKER_HOST one, not the context's.
 Assert-Equal -Case 'DOCKER_HOST outranks the context when classifying the endpoint kind' `
     -Expected 'remote-tcp' -Actual $remote.Docker.EndpointKind
-Assert-True -Case 'checkpoint carries the classifier version for later migration' `
-    -Condition ((Get-PreflightCheckpoint -Result $remote).classifier_version -ge 1)
+Assert-Equal -Case 'checkpoint carries the current classifier version for later migration' `
+    -Expected 2 -Actual (Get-PreflightCheckpoint -Result $remote).classifier_version
 
 Assert-Equal -Case 'loopback TCP host classifies as a local endpoint kind' `
     -Expected 'local-tcp' -Actual (Invoke-EnvironmentPreflight -Evidence (New-Evidence @{

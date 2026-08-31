@@ -25,7 +25,7 @@
 
 # Bump when the meaning of a persisted classification changes, so an old
 # checkpoint can be recognised as having come from a different classifier.
-$script:PreflightClassifierVersion = 1
+$script:PreflightClassifierVersion = 2
 
 # Docker documents WSL 2.1.5 as the minimum for its WSL 2 backend. This floor is
 # only applied when the WSL backend is actually the relevant path.
@@ -163,7 +163,7 @@ function Get-PreflightFirmwareState {
 function Get-PreflightWindowsVirtualizationState {
     # Deliberately separate from firmware state: "firmware says yes but no
     # hypervisor is running" and "firmware says no" need different actions.
-    param($Evidence)
+    param($Evidence, [bool]$DockerIsHealthyLocal = $false)
     $queried = Get-PreflightProperty $Evidence 'Queried' $false
     if (-not $queried) {
         return [pscustomobject]@{ Status = 'UNKNOWN'; HypervisorPresent = $null }
@@ -173,10 +173,13 @@ function Get-PreflightWindowsVirtualizationState {
     $pendingReboot = Get-PreflightProperty $Evidence 'PendingReboot' $null
 
     $known = @($features.Keys | Where-Object { $features[$_] -in @('Enabled', 'Disabled') })
-    if ($known.Count -eq 0 -and $null -eq $hypervisor) {
+    if ($known.Count -eq 0 -and $hypervisor -ne $true) {
         return [pscustomobject]@{ Status = 'UNKNOWN'; HypervisorPresent = $null }
     }
-    $disabled = @($features.Keys | Where-Object { $features[$_] -eq 'Disabled' })
+    $disabled = @($features.Keys | Where-Object {
+        $features[$_] -eq 'Disabled' -and
+        -not ($DockerIsHealthyLocal -and $_ -eq 'Microsoft-Windows-Subsystem-Linux')
+    })
     if ($disabled.Count -gt 0) {
         return [pscustomobject]@{ Status = 'WINDOWS_VIRTUALIZATION_FEATURE_MISSING'; HypervisorPresent = $hypervisor }
     }
@@ -348,10 +351,11 @@ function Invoke-EnvironmentPreflight {
     $firmware = Get-PreflightFirmwareState `
         -Evidence (Get-PreflightProperty $Evidence 'Firmware' $null) `
         -HypervisorPresent (Get-PreflightProperty $windowsEvidence 'HypervisorPresent' $null)
-    $windows = Get-PreflightWindowsVirtualizationState $windowsEvidence
     $dockerEvidence = Get-PreflightProperty $Evidence 'Docker' $null
     $docker = Get-PreflightDockerState -Evidence $dockerEvidence -MinimumDockerVersion $MinimumDockerVersion
     $dockerHealthy = ($docker.Status -eq 'DOCKER_HEALTHY_LOCAL')
+    $windows = Get-PreflightWindowsVirtualizationState `
+        -Evidence $windowsEvidence -DockerIsHealthyLocal $dockerHealthy
     $wsl = Get-PreflightWslState -Evidence (Get-PreflightProperty $Evidence 'Wsl' $null) -DockerIsHealthyLocal $dockerHealthy
 
     $result = [pscustomobject]@{
