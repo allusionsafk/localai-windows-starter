@@ -107,6 +107,23 @@ try {
 }
 }
 
+# 6b. Installer environment-preflight classifier + state regression suite.
+#     Fixture-only: it starts no Docker/WSL, changes no Windows state, and does
+#     not touch the network.
+$preflightTests = Join-Path $PSScriptRoot 'Test-InstallerPreflight.ps1'
+if (Test-Path -LiteralPath $preflightTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $pfOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $preflightTests 2>&1
+    $pfOk = ($LASTEXITCODE -eq 0)
+    $pfLines = @($pfOut | ForEach-Object { "$_" })
+    $pfSummary = @($pfLines | Where-Object { $_ -match 'PREFLIGHT TESTS' } | Select-Object -First 1)
+    $pfDetail = if ($pfSummary) { "$($pfSummary[0])".Trim() } else { ($pfLines | Select-Object -Last 1) }
+    if (-not $pfOk) { $pfDetail = (@($pfLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer preflight tests' $pfOk $pfDetail
+} else {
+    Add-Result 'Installer preflight tests' $true 'SKIPPED (Test-InstallerPreflight.ps1 not in this checkout)'
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.
