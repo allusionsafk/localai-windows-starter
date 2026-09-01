@@ -19,7 +19,7 @@ set "BOOT=%~dp0installer\bootstrap.ps1"
 if exist "%BOOT%" goto :run
 
 set "BOOTSTRAP_COMMIT=dbd8107872af037a328464c078fdc10e50d032cc"
-set "BOOTSTRAP_SHA256=__BOOTSTRAP_SHA256__"
+set "BOOTSTRAP_SHA256=440B3308BC11A3CA96432170A026B20AC7BA5A087C62B36112A4659CF3F619EF"
 set "BOOT=%TEMP%\localai-bootstrap-%BOOTSTRAP_COMMIT%.ps1"
 set "BOOT_URL=https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
 
