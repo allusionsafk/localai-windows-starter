@@ -1,0 +1,89 @@
+g.Size(530,28)
+    $f.Controls.Add($tb)
+
+    $ql = New-Object System.Windows.Forms.Label
+    $ql.Text = 'Quality'; $ql.Location = New-Object System.Drawing.Point(20,100); $ql.AutoSize = $true
+    $f.Controls.Add($ql)
+    $q = New-Object System.Windows.Forms.ComboBox
+    $q.DropDownStyle = 'DropDownList'; $q.Location = New-Object System.Drawing.Point(85,95); $q.Width = 190
+    [void]$q.Items.AddRange(@('Best available','Up to 4K','Up to 1440p','Up to 1080p','Up to 720p'))
+    $q.SelectedIndex = 0
+    $f.Controls.Add($q)
+
+    $note = New-Object System.Windows.Forms.Label
+    $note.Text = 'Public URLs only by default. Adaptive Media does not import browser cookies.'
+    $note.ForeColor = [System.Drawing.Color]::DimGray; $note.Location = New-Object System.Drawing.Point(20,140); $note.AutoSize = $true
+    $f.Controls.Add($note)
+
+    $play = New-Object System.Windows.Forms.Button
+    $play.Text = 'Play'; $play.Location = New-Object System.Drawing.Point(455,185); $play.Size = New-Object System.Drawing.Size(95,32)
+    $play.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $f.AcceptButton = $play; $f.Controls.Add($play)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'; $cancel.Location = New-Object System.Drawing.Point(350,185); $cancel.Size = New-Object System.Drawing.Size(95,32)
+    $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $f.CancelButton = $cancel; $f.Controls.Add($cancel)
+
+    if ($f.ShowDialog($script:MainForm) -eq [System.Windows.Forms.DialogResult]::OK) {
+        $url = $tb.Text.Trim()
+        if (-not (Test-IsUrl $url)) { Show-Message 'That does not look like a supported network URL.' 'Adaptive Media' ([System.Windows.Forms.MessageBoxIcon]::Warning); return }
+        $fmt = switch ($q.SelectedIndex) {
+            1 { 'bestvideo[height<=2160]+bestaudio/best[height<=2160]' }
+            2 { 'bestvideo[height<=1440]+bestaudio/best[height<=1440]' }
+            3 { 'bestvideo[height<=1080]+bestaudio/best[height<=1080]' }
+            4 { 'bestvideo[height<=720]+bestaudio/best[height<=720]' }
+            default { 'bestvideo+bestaudio/best' }
+        }
+        Play-Media @($url) $fmt
+    }
+}
+
+function Show-SettingsDialog {
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Adaptive Media Settings'; $f.StartPosition = 'CenterParent'; $f.ClientSize = New-Object System.Drawing.Size(560,390)
+    $f.FormBorderStyle = 'FixedDialog'; $f.MaximizeBox = $false; $f.MinimizeBox = $false
+    $f.BackColor = [System.Drawing.Color]::FromArgb(245,246,248)
+
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = 'Playback automation'; $title.Font = New-Object System.Drawing.Font('Segoe UI',14,[System.Drawing.FontStyle]::Bold)
+    $title.Location = New-Object System.Drawing.Point(20,18); $title.AutoSize = $true; $f.Controls.Add($title)
+
+    $hdr = New-Object System.Windows.Forms.CheckBox
+    $hdr.Text = 'Automatically switch HDR on active HDMI display(s) for local HDR/SDR video, then restore state'
+    $hdr.Location = New-Object System.Drawing.Point(24,62); $hdr.Size = New-Object System.Drawing.Size(510,42); $hdr.Checked = [bool]$script:Settings.AutoHdrSwitch
+    if (-not $script:HdrInteropAvailable) { $hdr.Enabled = $false; $hdr.Text += ' (API unavailable)' }
+    $f.Controls.Add($hdr)
+
+    $ext = New-Object System.Windows.Forms.CheckBox
+    $ext.Text = 'Prefer an external display when one is connected'; $ext.Location = New-Object System.Drawing.Point(24,110); $ext.Size = New-Object System.Drawing.Size(470,28); $ext.Checked = [bool]$script:Settings.PreferExternalDisplay
+    $f.Controls.Add($ext)
+
+    $fs = New-Object System.Windows.Forms.CheckBox
+    $fs.Text = 'Start fullscreen on the preferred external display'; $fs.Location = New-Object System.Drawing.Point(24,145); $fs.Size = New-Object System.Drawing.Size(470,28); $fs.Checked = [bool]$script:Settings.FullscreenExternal
+    $f.Controls.Add($fs)
+
+    $bit = New-Object System.Windows.Forms.CheckBox
+    $bit.Text = 'Enable HDMI bitstream (AC-3/E-AC-3/TrueHD/DTS-HD) when HDMI is active'; $bit.Location = New-Object System.Drawing.Point(24,180); $bit.Size = New-Object System.Drawing.Size(510,42); $bit.Checked = [bool]$script:Settings.HdmiBitstream
+    $f.Controls.Add($bit)
+    $bitNote = New-Object System.Windows.Forms.Label
+    $bitNote.Text = 'Leave this off for laptop speakers, TV speakers, Bluetooth, USB audio, or Atmos for Headphones.'
+    $bitNote.ForeColor = [System.Drawing.Color]::DimGray; $bitNote.Location = New-Object System.Drawing.Point(43,220); $bitNote.Size = New-Object System.Drawing.Size(480,38); $f.Controls.Add($bitNote)
+
+    $fallback = New-Object System.Windows.Forms.CheckBox
+    $fallback.Text = 'Offer MPC-BE if MPV returns a playback error'; $fallback.Location = New-Object System.Drawing.Point(24,270); $fallback.Size = New-Object System.Drawing.Size(470,28); $fallback.Checked = [bool]$script:Settings.MpcFallback
+    $fallback.Enabled = [bool](Resolve-MpcBe)
+    $f.Controls.Add($fallback)
+
+    $save = New-Object System.Windows.Forms.Button
+    $save.Text = 'Save'; $save.Location = New-Object System.Drawing.Point(445,338); $save.Size = New-Object System.Drawing.Size(95,32); $save.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $f.AcceptButton = $save; $f.Controls.Add($save)
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'; $cancel.Location = New-Object System.Drawing.Point(340,338); $cancel.Size = New-Object System.Drawing.Size(95,32); $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $f.CancelButton = $cancel; $f.Controls.Add($cancel)
+
+    if ($f.ShowDialog($script:MainForm) -eq [System.Windows.Forms.DialogResult]::OK) {
+        $script:Settings.AutoHdrSwitch = $hdr.Checked
+        $script:Settings.PreferExternalDisplay = $ext.Checked
+        $script:Settings.FullscreenExternal = $fs.Checked
+        $script:Settings.HdmiBitstream = $bit.Checked
+        $script:Settings.MpcFallback = $fallba
