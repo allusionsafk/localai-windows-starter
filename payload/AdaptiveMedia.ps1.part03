@@ -1,0 +1,140 @@
+multiple eligible HDMI targets are active, the target mapping is ambiguous,
+    # so fail closed and let mpv/libplacebo render to the already-active display state.
+    $targets = @($before | Where-Object { $_.Supported -and -not $_.ForceDisabled -and $_.OutputTechnology -eq 5 })
+    if ($targets.Count -ne 1) { return $null }
+
+    $record = [pscustomobject]@{ timestamp=(Get-Date).ToString('o'); displays=$targets }
+    $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $script:RecoveryPath -Encoding UTF8
+
+    $changed = $false
+    foreach ($d in $targets) {
+        $desired = [bool]$Probe.HdrFamily
+        if ([bool]$d.Enabled -ne $desired) {
+            $ok = [AdaptiveMedia.Native.HdrController]::SetState([uint32]$d.AdapterLow, [int]$d.AdapterHigh, [uint32]$d.TargetId, $desired)
+            if ($ok) { $changed = $true }
+        }
+    }
+    return [pscustomobject]@{ Before=$targets; Changed=$changed }
+}
+
+function Restore-HdrPolicy($Token) {
+    if ($null -eq $Token -or -not $script:HdrInteropAvailable) { return }
+    try {
+        foreach ($d in @($Token.Before)) {
+            if ($d.Supported) {
+                [void][AdaptiveMedia.Native.HdrController]::SetState([uint32]$d.AdapterLow, [int]$d.AdapterHigh, [uint32]$d.TargetId, [bool]$d.Enabled)
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $script:RecoveryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-AutoProfile {
+    $power = [System.Windows.Forms.SystemInformation]::PowerStatus.PowerLineStatus
+    if ($power -eq [System.Windows.Forms.PowerLineStatus]::Offline) { return 'battery' }
+    return 'reference'
+}
+
+function Show-Message([string]$Text, [string]$Title='Adaptive Media', [System.Windows.Forms.MessageBoxIcon]$Icon=[System.Windows.Forms.MessageBoxIcon]::Information) {
+    [void][System.Windows.Forms.MessageBox]::Show($Text, $Title, [System.Windows.Forms.MessageBoxButtons]::OK, $Icon)
+}
+
+function Play-Media {
+    param(
+        [string[]]$Items,
+        [string]$YtdlFormat = $null
+    )
+    if (-not $Items -or $Items.Count -eq 0) { return }
+    $mpv = Resolve-Mpv
+    if (-not $mpv) {
+        Show-Message 'mpv.exe could not be found. Re-run Adaptive Media Setup to repair the installation.' 'Adaptive Media' ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    $env:PATH = $script:ToolsDir + ';' + $env:PATH
+    $expanded = New-Object System.Collections.Generic.List[string]
+    foreach ($i in $Items) {
+        if (Test-Path -LiteralPath $i -PathType Container) {
+            foreach ($f in (Get-MediaFromFolder $i)) { $expanded.Add($f) }
+        } else { $expanded.Add($i) }
+    }
+    if ($expanded.Count -eq 0) {
+        Show-Message 'No playable files were found in that selection.'
+        return
+    }
+
+    $first = $expanded[0]
+    $probe = if (-not (Test-IsUrl $first)) { Probe-Media $mpv $first } else { $null }
+    $hdrToken = Apply-HdrPolicy $probe
+    $playlist = $null
+    $target = Get-TargetScreen
+
+    $profile = [string]$script:Settings.Profile
+    if ($profile -eq 'Automatic') { $profile = Get-AutoProfile }
+    else { $profile = $profile.ToLowerInvariant() }
+
+    $mpvArgs = New-Object System.Collections.Generic.List[string]
+    $mpvArgs.Add("--config-dir=$script:ConfigDir")
+    $mpvArgs.Add("--profile=$profile")
+
+    $hasHdmi = $false
+    foreach ($d in (Get-HdrDisplays)) { if ($d.OutputTechnology -eq 5) { $hasHdmi = $true } }
+    if ($script:Settings.HdmiBitstream -and $hasHdmi) { $mpvArgs.Add('--profile=hdmi-bitstream') }
+    else { $mpvArgs.Add('--profile=pcm-safe') }
+
+    if ($target -and $target.External -and $script:Settings.FullscreenExternal) {
+        $mpvArgs.Add('--fullscreen')
+        $mpvArgs.Add("--screen=$($target.Index)")
+        $mpvArgs.Add("--fs-screen=$($target.Index)")
+    }
+
+    if ($YtdlFormat) {
+        $mpvArgs.Add('--ytdl=yes')
+        $mpvArgs.Add("--ytdl-format=$YtdlFormat")
+    }
+
+    if ($expanded.Count -gt 1 -and -not (Test-IsUrl $first)) {
+        $playlist = New-PlaylistFile @($expanded)
+        $mpvArgs.Add("--playlist=$playlist")
+    } else {
+        foreach ($i in $expanded) { $mpvArgs.Add($i) }
+    }
+
+    try {
+        if ($script:MainForm) { $script:MainForm.Hide() }
+        & $mpv @mpvArgs
+        $code = $LASTEXITCODE
+        if ($code -ne 0 -and $script:Settings.MpcFallback -and -not (Test-IsUrl $first)) {
+            $mpc = Resolve-MpcBe
+            if ($mpc) {
+                $answer = [System.Windows.Forms.MessageBox]::Show("MPV exited with code $code. Open the first item in MPC-BE as a compatibility fallback?", 'Adaptive Media', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+                if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) { Start-Process -FilePath $mpc -ArgumentList ('"' + $first + '"') | Out-Null }
+            }
+        }
+    } catch {
+        Show-Message ("Playback failed:`r`n`r`n" + $_.Exception.Message) 'Adaptive Media' ([System.Windows.Forms.MessageBoxIcon]::Error)
+    } finally {
+        Restore-HdrPolicy $hdrToken
+        if ($playlist) { Remove-Item -LiteralPath $playlist -Force -ErrorAction SilentlyContinue }
+        if ($script:MainForm) { $script:MainForm.Show(); $script:MainForm.Activate() }
+    }
+}
+
+function Show-UrlDialog {
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Open network media'
+    $f.StartPosition = 'CenterParent'
+    $f.ClientSize = New-Object System.Drawing.Size(570,235)
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false
+    $f.MinimizeBox = $false
+    $f.BackColor = [System.Drawing.Color]::FromArgb(245,246,248)
+
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = 'Paste a direct media/stream URL or a webpage supported by yt-dlp:'
+    $l.Location = New-Object System.Drawing.Point(20,20); $l.AutoSize = $true
+    $f.Controls.Add($l)
+
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Location = New-Object System.Drawing.Point(20,50); $tb.Size = New-Object System.Drawin
