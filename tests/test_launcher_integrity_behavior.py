@@ -2,7 +2,6 @@ from hashlib import sha256
 from pathlib import Path
 from re import MULTILINE, escape, fullmatch, search
 
-
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "Install Local AI.cmd"
 BOOTSTRAP = ROOT / "installer" / "bootstrap.ps1"
