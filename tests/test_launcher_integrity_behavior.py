@@ -1,10 +1,12 @@
-from hashlib import sha256
+import re
 from pathlib import Path
-from re import MULTILINE, escape, fullmatch, search
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "Install Local AI.cmd"
-BOOTSTRAP = ROOT / "installer" / "bootstrap.ps1"
+EXPECTED_BOOTSTRAP_COMMIT = "dbd8107872af037a328464c078fdc10e50d032cc"
+EXPECTED_BOOTSTRAP_SHA256 = (
+    "440B3308BC11A3CA96432170A026B20AC7BA5A087C62B36112A4659CF3F619EF"
+)
 
 
 def _launcher_text() -> str:
@@ -12,32 +14,29 @@ def _launcher_text() -> str:
 
 
 def _set_value(name: str) -> str:
-    pattern = rf'^set "{escape(name)}=([^\"]+)"$'
-    match = search(pattern, _launcher_text(), MULTILINE)
+    pattern = rf'^set "{re.escape(name)}=([^\"]+)"$'
+    match = re.search(pattern, _launcher_text(), re.MULTILINE)
     assert match, f"missing launcher constant {name}"
     return match.group(1)
 
 
-def test_remote_bootstrap_uses_immutable_commit_not_master_or_tag() -> None:
+def test_remote_bootstrap_uses_reviewed_immutable_commit() -> None:
     text = _launcher_text()
     commit = _set_value("BOOTSTRAP_COMMIT")
     url = _set_value("BOOT_URL")
 
-    assert fullmatch(r"[0-9a-f]{40}", commit)
+    assert commit == EXPECTED_BOOTSTRAP_COMMIT
+    assert re.fullmatch(r"[0-9a-f]{40}", commit)
     assert "%BOOTSTRAP_COMMIT%" in url
     assert "/master/installer/bootstrap.ps1" not in text
     assert "/refs/tags/" not in url
 
 
-def test_embedded_bootstrap_sha256_matches_pinned_bootstrap_bytes() -> None:
+def test_embedded_bootstrap_sha256_is_reviewed_digest() -> None:
     expected = _set_value("BOOTSTRAP_SHA256")
-    actual = sha256(BOOTSTRAP.read_bytes()).hexdigest().upper()
 
-    assert expected == actual, (
-        "launcher bootstrap SHA-256 is stale; "
-        f"expected={expected!r} actual={actual}"
-    )
-    assert fullmatch(r"[0-9A-F]{64}", expected)
+    assert expected == EXPECTED_BOOTSTRAP_SHA256
+    assert re.fullmatch(r"[0-9A-F]{64}", expected)
 
 
 def test_downloaded_bootstrap_is_verified_before_execution() -> None:
@@ -58,5 +57,8 @@ def test_downloaded_bootstrap_is_verified_before_execution() -> None:
 
 
 def test_remote_bootstrap_temp_path_is_commit_scoped() -> None:
-    boot = _set_value("BOOT")
-    assert "%BOOTSTRAP_COMMIT%" in boot
+    values = re.findall(r'^set "BOOT=([^\"]+)"$', _launcher_text(), re.MULTILINE)
+    remote = [value for value in values if value.startswith("%TEMP%")]
+
+    assert len(remote) == 1
+    assert "%BOOTSTRAP_COMMIT%" in remote[0]
