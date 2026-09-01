@@ -13,14 +13,20 @@ echo   old folder aside by itself and starts fresh.
 echo.
 
 rem If this .cmd sits inside the downloaded repo, run the local bootstrap.
-rem Otherwise (someone downloaded just this one file), fetch it from master.
+rem Otherwise (someone downloaded just this one file), fetch an immutable
+rem bootstrap commit and verify its SHA-256 before PowerShell is allowed to run it.
 set "BOOT=%~dp0installer\bootstrap.ps1"
 if exist "%BOOT%" goto :run
 
+set "BOOTSTRAP_COMMIT=dbd8107872af037a328464c078fdc10e50d032cc"
+set "BOOTSTRAP_SHA256=__BOOTSTRAP_SHA256__"
+set "BOOT=%TEMP%\localai-bootstrap-%BOOTSTRAP_COMMIT%.ps1"
+set "BOOT_URL=https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/%BOOTSTRAP_COMMIT%/installer/bootstrap.ps1"
+
 echo   Downloading the installer...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1' -OutFile ($env:TEMP + '\localai-bootstrap.ps1')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; $out=$env:BOOT; Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Invoke-WebRequest -UseBasicParsing $env:BOOT_URL -OutFile $out; $actual=(Get-FileHash -LiteralPath $out -Algorithm SHA256).Hash.ToUpperInvariant(); $expected=$env:BOOTSTRAP_SHA256.ToUpperInvariant(); if ($actual -ne $expected) { Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue; Write-Error ('Installer integrity check failed. Expected SHA-256 ' + $expected + ', got ' + $actual + '. Refusing to run the downloaded bootstrap.'); exit 23 }"
 if errorlevel 1 goto :failed
-set "BOOT=%TEMP%\localai-bootstrap.ps1"
+if not exist "%BOOT%" goto :failed
 
 :run
 echo   Starting the installer...
