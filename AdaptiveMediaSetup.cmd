@@ -13,7 +13,7 @@ copy /b "%PAYLOAD%\AdaptiveMedia.ps1.part00"+"%PAYLOAD%\AdaptiveMedia.ps1.part01
 if errorlevel 1 goto :badbuild
 
 set "HASH="
-for /f %%H in ('powershell.exe -NoLogo -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath ''%APP%'').Hash.ToLowerInvariant()"') do set "HASH=%%H"
+for /f %%H in ('powershell.exe -NoLogo -NoProfile -Command "(Get-FileHash -Algorithm SHA256 -LiteralPath '%APP%').Hash.ToLowerInvariant()"') do set "HASH=%%H"
 if /I not "%HASH%"=="ebf267afbb19866fc7040ce687ee43b013378706fe47f7040e9a78e36f4c2d02" goto :badhash
 
 start "" powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%ROOT%Install-AdaptiveMedia.ps1"
