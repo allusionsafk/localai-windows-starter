@@ -1,0 +1,156 @@
+
+            public uint bitsPerColorChannel;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct SET_COLOR_STATE
+        {
+            public DEVICE_INFO_HEADER header;
+            public uint value;
+        }
+
+        [DllImport("user32.dll")]
+        static extern int GetDisplayConfigBufferSizes(uint flags, out uint pathCount, out uint modeCount);
+
+        [DllImport("user32.dll")]
+        static extern int QueryDisplayConfig(uint flags, ref uint pathCount, [Out] PATH_INFO[] paths, ref uint modeCount, [Out] MODE_INFO[] modes, IntPtr topologyId);
+
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigGetDeviceInfo(ref TARGET_DEVICE_NAME packet);
+
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigGetDeviceInfo(ref GET_COLOR_INFO packet);
+
+        [DllImport("user32.dll")]
+        static extern int DisplayConfigSetDeviceInfo(ref SET_COLOR_STATE packet);
+
+        static PATH_INFO[] QueryPaths()
+        {
+            uint pc, mc;
+            int err;
+            do
+            {
+                err = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out pc, out mc);
+                if (err != 0) throw new InvalidOperationException("GetDisplayConfigBufferSizes failed: " + err);
+                PATH_INFO[] paths = new PATH_INFO[pc];
+                MODE_INFO[] modes = new MODE_INFO[mc];
+                err = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pc, paths, ref mc, modes, IntPtr.Zero);
+                if (err == 0)
+                {
+                    Array.Resize(ref paths, (int)pc);
+                    return paths;
+                }
+            } while (err == ERROR_INSUFFICIENT_BUFFER);
+            throw new InvalidOperationException("QueryDisplayConfig failed: " + err);
+        }
+
+        static string GetName(LUID adapter, uint targetId)
+        {
+            TARGET_DEVICE_NAME p = new TARGET_DEVICE_NAME();
+            p.header.type = GET_TARGET_NAME;
+            p.header.size = (uint)Marshal.SizeOf(typeof(TARGET_DEVICE_NAME));
+            p.header.adapterId = adapter;
+            p.header.id = targetId;
+            int err = DisplayConfigGetDeviceInfo(ref p);
+            if (err == 0 && !String.IsNullOrWhiteSpace(p.monitorFriendlyDeviceName)) return p.monitorFriendlyDeviceName;
+            return "Display " + targetId;
+        }
+
+        static GET_COLOR_INFO GetColor(LUID adapter, uint targetId)
+        {
+            GET_COLOR_INFO p = new GET_COLOR_INFO();
+            p.header.type = GET_ADVANCED_COLOR_INFO;
+            p.header.size = (uint)Marshal.SizeOf(typeof(GET_COLOR_INFO));
+            p.header.adapterId = adapter;
+            p.header.id = targetId;
+            int err = DisplayConfigGetDeviceInfo(ref p);
+            if (err != 0) throw new InvalidOperationException("DisplayConfigGetDeviceInfo failed: " + err);
+            return p;
+        }
+
+        public static DisplayColorInfo[] GetDisplays()
+        {
+            List<DisplayColorInfo> result = new List<DisplayColorInfo>();
+            PATH_INFO[] paths = QueryPaths();
+            for (int i = 0; i < paths.Length; i++)
+            {
+                PATH_INFO path = paths[i];
+                DisplayColorInfo item = new DisplayColorInfo();
+                item.Index = i;
+                item.AdapterLow = path.targetInfo.adapterId.LowPart;
+                item.AdapterHigh = path.targetInfo.adapterId.HighPart;
+                item.TargetId = path.targetInfo.id;
+                item.OutputTechnology = path.targetInfo.outputTechnology;
+                item.Name = GetName(path.targetInfo.adapterId, path.targetInfo.id);
+                try
+                {
+                    GET_COLOR_INFO c = GetColor(path.targetInfo.adapterId, path.targetInfo.id);
+                    item.Supported = (c.value & 0x1) != 0;
+                    item.Enabled = (c.value & 0x2) != 0;
+                    item.ForceDisabled = (c.value & 0x8) != 0;
+                }
+                catch
+                {
+                    item.Supported = false;
+                    item.Enabled = false;
+                    item.ForceDisabled = false;
+                }
+                result.Add(item);
+            }
+            return result.ToArray();
+        }
+
+        public static bool SetState(uint adapterLow, int adapterHigh, uint targetId, bool enable)
+        {
+            LUID luid = new LUID();
+            luid.LowPart = adapterLow;
+            luid.HighPart = adapterHigh;
+            GET_COLOR_INFO before;
+            try { before = GetColor(luid, targetId); }
+            catch { return false; }
+            bool supported = (before.value & 0x1) != 0;
+            bool forced = (before.value & 0x8) != 0;
+            if (!supported || (enable && forced)) return false;
+            bool current = (before.value & 0x2) != 0;
+            if (current == enable) return true;
+
+            SET_COLOR_STATE p = new SET_COLOR_STATE();
+            p.header.type = SET_ADVANCED_COLOR_STATE;
+            p.header.size = (uint)Marshal.SizeOf(typeof(SET_COLOR_STATE));
+            p.header.adapterId = luid;
+            p.header.id = targetId;
+            p.value = enable ? 1u : 0u;
+            if (DisplayConfigSetDeviceInfo(ref p) != 0) return false;
+            try
+            {
+                GET_COLOR_INFO after = GetColor(luid, targetId);
+                return ((after.value & 0x2) != 0) == enable;
+            }
+            catch { return false; }
+        }
+    }
+}
+'@
+
+$script:HdrInteropAvailable = $false
+try {
+    Add-Type -TypeDefinition $displayInterop -Language CSharp -ErrorAction Stop
+    $script:HdrInteropAvailable = $true
+} catch {
+    $script:HdrInteropAvailable = $false
+}
+
+function New-DefaultSettings {
+    [pscustomobject]@{
+        Profile = 'Automatic'
+        AutoHdrSwitch = $true
+        PreferExternalDisplay = $true
+        FullscreenExternal = $true
+        HdmiBitstream = $false
+        MpcFallback = $true
+    }
+}
+
+function Load-Settings {
+    $d = New-DefaultSettings
+    if (-not (T
