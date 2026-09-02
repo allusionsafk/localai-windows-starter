@@ -66,16 +66,17 @@ $engineText = [regex]::Replace(
 )
 Write-Utf8NoBom $engine $engineText
 
-$oldNvidia = @'
-    $nvidia = Test-NvidiaGpuPresent
-    $vpp = New-Object System.Collections.Generic.List[string]
-'@
-$newNvidia = @'
-    $integrationNvidia = $PlanJson -and ([Environment]::GetEnvironmentVariable('ADAPTIVE_MEDIA_INTEGRATION_NVIDIA') -eq '1')
-    $nvidia = (Test-NvidiaGpuPresent) -or $integrationNvidia
-    $vpp = New-Object System.Collections.Generic.List[string]
-'@
-Replace-Exact $engine $oldNvidia $newNvidia
+# Add deterministic NVIDIA capability only inside PlanJson enhancement planning.
+$engineText = Read-Text $engine
+$nvidiaPattern = '(?m)^    \$nvidia = Test-NvidiaGpuPresent\r?$'
+$nvidiaMatches = [regex]::Matches($engineText, $nvidiaPattern)
+if ($nvidiaMatches.Count -ne 1) {
+    throw "Expected exactly one per-video NVIDIA planning assignment; found $($nvidiaMatches.Count)."
+}
+$nvidiaReplacement = '    $integrationNvidia = $PlanJson -and ([Environment]::GetEnvironmentVariable(''ADAPTIVE_MEDIA_INTEGRATION_NVIDIA'') -eq ''1'')' + [Environment]::NewLine +
+                     '    $nvidia = (Test-NvidiaGpuPresent) -or $integrationNvidia'
+$engineText = [regex]::Replace($engineText, $nvidiaPattern, $nvidiaReplacement, 1)
+Write-Utf8NoBom $engine $engineText
 
 # ---------------------------------------------------------------------------
 # Carry integration-only capability data through the real BackendBridge method.
@@ -84,12 +85,13 @@ $oldSignature = '    public async Task<PlaybackLaunchPlan> GetPlaybackPlanAsync(
 $newSignature = '    public async Task<PlaybackLaunchPlan> GetPlaybackPlanAsync(IReadOnlyList<string> items, PlaybackOptions options, string? integrationProbeJson = null, bool integrationNvidia = false)'
 Replace-Exact $backend $oldSignature $newSignature
 
-$oldPsi = @'
-        var psi = NewPsi(capture: true);
-        psi.ArgumentList.Add("-Headless");
-        psi.ArgumentList.Add("-PlanJson");
-'@
-$newPsi = @'
+$backendText = Read-Text $backend
+$psiPattern = '(?m)^        var psi = NewPsi\(capture: true\);\r?\n        psi\.ArgumentList\.Add\("-Headless"\);\r?\n        psi\.ArgumentList\.Add\("-PlanJson"\);'
+$psiMatches = [regex]::Matches($backendText, $psiPattern)
+if ($psiMatches.Count -ne 1) {
+    throw "Expected exactly one playback-plan ProcessStartInfo sequence; found $($psiMatches.Count)."
+}
+$psiReplacement = @'
         var psi = NewPsi(capture: true);
         if (!string.IsNullOrWhiteSpace(integrationProbeJson))
             psi.Environment["ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON"] = integrationProbeJson;
@@ -98,7 +100,8 @@ $newPsi = @'
         psi.ArgumentList.Add("-Headless");
         psi.ArgumentList.Add("-PlanJson");
 '@
-Replace-Exact $backend $oldPsi $newPsi
+$backendText = [regex]::Replace($backendText, $psiPattern, $psiReplacement, 1)
+Write-Utf8NoBom $backend $backendText
 
 # ---------------------------------------------------------------------------
 # Exercise RTX VSR + RTX Video HDR through WPF -> BackendBridge -> engine.
