@@ -1,2 +1,2 @@
 trigger stable 0.3.0 Windows build, isolated smoke validation, and GitHub release
-retry: deterministic checksum parser
+retry: normalized checksum BOM handling on Windows runner
