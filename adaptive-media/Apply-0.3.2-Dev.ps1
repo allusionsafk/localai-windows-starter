@@ -79,6 +79,77 @@ $engineText = [regex]::Replace(
 Write-Utf8NoBom $engine $engineText
 
 # ---------------------------------------------------------------------------
+# 0.3.2 dev: decode native UTF-8 tool output explicitly in diagnostics.
+# ---------------------------------------------------------------------------
+# Windows PowerShell 5.1 decodes direct native-pipeline output through the
+# console code page. mpv emits UTF-8, so C2 A9 (copyright sign) was shown as
+# CP437 box-drawing glyphs. Capture native stdout through ProcessStartInfo and
+# explicitly request UTF-8 decoding instead.
+$diagMarker = 'function Write-Diagnostics {'
+$utf8Helper = @'
+function Get-NativeUtf8FirstLine {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [Parameter(Mandatory=$true)][string[]]$Arguments
+    )
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $psi.StandardErrorEncoding = New-Object System.Text.UTF8Encoding($false)
+    $psi.WorkingDirectory = Split-Path -Parent $FilePath
+    $psi.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }) -join ' ')
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    if (-not $process) { throw "Could not start native diagnostics tool: $FilePath" }
+    try {
+        $stdout = $process.StandardOutput.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw $(if ([string]::IsNullOrWhiteSpace($stderr)) { "Native diagnostics tool exited with code $($process.ExitCode)." } else { $stderr.Trim() })
+        }
+        return (($stdout -split "`r?`n") | Select-Object -First 1)
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Write-Diagnostics {
+'@
+Replace-Exact $engine $diagMarker $utf8Helper
+
+$oldMpvVersion = '    if ($mpv) { try { $lines.Add(''MPV version: '' + ((& $mpv --no-config --version | Select-Object -First 1) -join '''')) } catch {} }'
+$newMpvVersion = '    if ($mpv) { try { $lines.Add(''MPV version: '' + (Get-NativeUtf8FirstLine $mpv @(''--no-config'',''--version''))) } catch {} }'
+Replace-Exact $engine $oldMpvVersion $newMpvVersion
+
+# Make multi-adapter diagnostics useful without pretending Win32_VideoController
+# proves active display ownership. This is only an informational topology hint.
+$oldGpuDiag = '    try { $lines.Add(''GPU(s): '' + ((Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + '' driver '' + $_.DriverVersion }) -join ''; '')) } catch {}'
+$newGpuDiag = @'
+    try {
+        $diagGpus = @(Get-CimInstance Win32_VideoController)
+        $lines.Add('GPU(s): ' + (($diagGpus | ForEach-Object { $_.Name + ' driver ' + $_.DriverVersion }) -join '; '))
+        if ($diagGpus.Count -gt 1) {
+            $hasNvidia = @($diagGpus | Where-Object { $_.Name -match 'NVIDIA' }).Count -gt 0
+            $hasIntel = @($diagGpus | Where-Object { $_.Name -match 'Intel' }).Count -gt 0
+            $hint = if ($hasNvidia -and $hasIntel) {
+                'possible NVIDIA + Intel hybrid/MUX topology'
+            } else {
+                'multiple graphics adapters detected'
+            }
+            $lines.Add('Graphics topology hint: ' + $hint + '; this does not prove which adapter currently owns the display path.')
+        }
+    } catch {}
+'@
+Replace-Exact $engine $oldGpuDiag $newGpuDiag
+
+# ---------------------------------------------------------------------------
 # 0.3.2 dev version metadata. This is an internal candidate, not a release.
 # ---------------------------------------------------------------------------
 Replace-Exact $iss  '#define MyAppVersion "0.3.1"' '#define MyAppVersion "0.3.2-dev1"'
@@ -139,6 +210,15 @@ if ($verifyEngine -match '--video-sync-max-factor=12') {
 if ($verifyEngine -match "\.Add\('--video-sync=display-resample'\s*,") {
     throw 'Invalid multi-argument Add() form remains in the 0.3.2 engine.'
 }
+if (-not $verifyEngine.Contains('StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)')) {
+    throw '0.3.2 diagnostics UTF-8 native-output decoding is missing.'
+}
+if ($verifyEngine.Contains('& $mpv --no-config --version')) {
+    throw '0.3.2 diagnostics still directly pipes mpv version output through the PowerShell console code page.'
+}
+if (-not $verifyEngine.Contains('Graphics topology hint: ')) {
+    throw '0.3.2 multi-adapter diagnostics hint is missing.'
+}
 
 $verifyProgram = Read-Text $program
 if (([regex]::Matches($verifyProgram, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -lt 2) {
@@ -148,4 +228,4 @@ if (-not $verifyProgram.Contains('AdaptiveMedia-0.3.2-integration-error.txt')) {
     throw '0.3.2 dev integration exception capture is missing.'
 }
 
-Write-Host 'Adaptive Media 0.3.2-dev1 fullscreen and motion-presentation fixes applied and verified.'
+Write-Host 'Adaptive Media 0.3.2-dev1 fullscreen, motion-presentation, and diagnostics fixes applied and verified.'
