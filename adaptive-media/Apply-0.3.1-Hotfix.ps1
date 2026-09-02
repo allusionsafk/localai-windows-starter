@@ -20,7 +20,7 @@ function Replace-Exact([string]$Path, [string]$Old, [string]$New, [int]$Expected
     $text = Read-Text $Path
     $count = ([regex]::Matches($text, [regex]::Escape($Old))).Count
     if ($count -ne $ExpectedCount) {
-        throw "Expected $ExpectedCount occurrence(s) of '$Old' in $Path, found $count."
+        throw "Expected $ExpectedCount occurrence(s) in $Path, found $count. Needle: $Old"
     }
     Write-Utf8NoBom $Path ($text.Replace($Old, $New))
 }
@@ -34,12 +34,16 @@ $readme  = Join-Path $SourceRoot 'README.md'
 $mpvConf = Join-Path $SourceRoot 'payload\mpv-config\mpv.conf'
 $input   = Join-Path $SourceRoot 'payload\mpv-config\input.conf'
 
-# mpv's video-sync-max-factor is constrained to the inclusive range 1..10.
-# 0.3.0 accidentally emitted 12 for both motion modes, so mpv rejected the command
-# line at startup and exited with code 1 before playback began.
-Replace-Exact $engine "--video-sync-max-factor=12" "--video-sync-max-factor=10" 2
+# ---------------------------------------------------------------------------
+# 0.3.1 playback fix
+# ---------------------------------------------------------------------------
+# mpv constrains video-sync-max-factor to 1..10. 0.3.0 emitted 12 for both
+# interpolation lanes, causing mpv to reject the command line and exit code 1.
+Replace-Exact $engine '--video-sync-max-factor=12' '--video-sync-max-factor=10' 2
 
-# Stable patch version metadata.
+# ---------------------------------------------------------------------------
+# 0.3.1 version metadata
+# ---------------------------------------------------------------------------
 Replace-Exact $iss  '#define MyAppVersion "0.3.0"' '#define MyAppVersion "0.3.1"'
 Replace-Exact $iss  'VersionInfoVersion=0.3.0.0' 'VersionInfoVersion=0.3.1.0'
 Replace-Exact $iss  'VersionInfoProductVersion=0.3.0.0' 'VersionInfoProductVersion=0.3.1.0'
@@ -52,28 +56,106 @@ Replace-Exact $readme 'AdaptiveMediaSetup-0.3.0-x64.exe' 'AdaptiveMediaSetup-0.3
 Replace-Exact $mpvConf '# Adaptive Media 0.3.0 - managed mpv defaults' '# Adaptive Media 0.3.1 - managed mpv defaults'
 Replace-Exact $input '# Adaptive Media 0.3.0' '# Adaptive Media 0.3.1'
 
-# Strengthen the built-in integration gate so this exact regression cannot ship again.
-# Regex is deliberately line-ending agnostic because the reviewed transport can be LF
-# while Windows checkout/extraction can present CRLF.
-$programText = Read-Text $program
-$enhancedPattern = '(?ms)^\s{12}var enhanced = await backend\.GetPlaybackPlanAsync\(\s*syntheticUrl, new PlaybackOptions\("Enhanced", "HighQuality", "Smooth", true, false\)\);\s*^\s{12}if \(!Has\(enhanced, "--scale=ewa_lanczossharp"\) \|\|\s*^\s{16}!Has\(enhanced, "--sigmoid-upscaling=yes"\) \|\|\s*^\s{16}!Has\(enhanced, "--video-sync=display-resample"\) \|\|\s*^\s{16}!Has\(enhanced, "--interpolation=yes"\) \|\|\s*^\s{16}!Has\(enhanced, "--deband=yes"\)\)\s*^\s{16}return 22;\s*'
-$matches = [regex]::Matches($programText, $enhancedPattern)
-if ($matches.Count -ne 1) {
-    throw "Expected exactly one 0.3.0 enhanced integration block; found $($matches.Count). Refusing to weaken the gate."
-}
-$replacement = @'
-            var enhanced = await backend.GetPlaybackPlanAsync(
-                syntheticUrl, new PlaybackOptions("Enhanced", "HighQuality", "Smooth", true, false));
-            if (!Has(enhanced, "--scale=ewa_lanczossharp") ||
-                !Has(enhanced, "--sigmoid-upscaling=yes") ||
-                !Has(enhanced, "--video-sync=display-resample") ||
-                !Has(enhanced, "--video-sync-max-factor=10") ||
-                !Has(enhanced, "--interpolation=yes") ||
-                !Has(enhanced, "--tscale=linear") ||
-                !Has(enhanced, "--deband=yes") ||
-                Has(enhanced, "--video-sync-max-factor=12"))
-                return 22;
+# ---------------------------------------------------------------------------
+# Clean in-launcher explanations
+# ---------------------------------------------------------------------------
+# Keep the dropdown labels short and stable for backend semantics, but put a
+# compact, always-visible explanation immediately underneath each choice.
+$profileOld = @'
+                            <ComboBox x:Name="ProfileBox" Grid.Column="1" SelectedIndex="0">
+                                <ComboBoxItem Content="Automatic"/>
+                                <ComboBoxItem Content="Reference"/>
+                                <ComboBoxItem Content="Enhanced"/>
+                                <ComboBoxItem Content="Compatibility"/>
+                            </ComboBox>
+'@
+$profileNew = @'
+                            <StackPanel Grid.Column="1">
+                                <ComboBox x:Name="ProfileBox" SelectedIndex="0">
+                                    <ComboBoxItem Content="Automatic" ToolTip="Sensible defaults for the current PC and source."/>
+                                    <ComboBoxItem Content="Reference" ToolTip="Preserve source cadence and colour intent; avoid optional processing."/>
+                                    <ComboBoxItem Content="Enhanced" ToolTip="Use the selected opt-in processing features for this launch."/>
+                                    <ComboBoxItem Content="Compatibility" ToolTip="Use the fallback playback path for troublesome files or drivers."/>
+                                </ComboBox>
+                                <TextBlock Text="Automatic — sensible defaults  •  Reference — source-faithful  •  Enhanced — tuned processing  •  Compatibility — fallback path"
+                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
+                            </StackPanel>
+'@
+Replace-Exact $xaml $profileOld $profileNew
 
+$upscaleOld = @'
+                            <ComboBox x:Name="UpscaleBox" Grid.Column="4" SelectedIndex="0">
+                                <ComboBoxItem Content="Off" Tag="Off"/>
+                                <ComboBoxItem Content="High quality" Tag="HighQuality"/>
+                                <ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr"/>
+                            </ComboBox>
+'@
+$upscaleNew = @'
+                            <StackPanel Grid.Column="4">
+                                <ComboBox x:Name="UpscaleBox" SelectedIndex="0">
+                                    <ComboBoxItem Content="Off" Tag="Off" ToolTip="No extra upscaling processing."/>
+                                    <ComboBoxItem Content="High quality" Tag="HighQuality" ToolTip="EWA Lanczos Sharp scaling for lower-resolution video."/>
+                                    <ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr" ToolTip="Optional NVIDIA driver-assisted video upscaling."/>
+                                </ComboBox>
+                                <TextBlock Text="Off — native scaling  •  High quality — EWA Lanczos Sharp  •  RTX SR — experimental NVIDIA upscaling"
+                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
+                            </StackPanel>
+'@
+Replace-Exact $xaml $upscaleOld $upscaleNew
+
+$motionOld = @'
+                            <ComboBox x:Name="MotionBox" Grid.Column="1" SelectedIndex="0">
+                                <ComboBoxItem Content="Native cadence" Tag="Off"/>
+                                <ComboBoxItem Content="Gentle smooth motion" Tag="Gentle"/>
+                                <ComboBoxItem Content="Smooth motion" Tag="Smooth"/>
+                            </ComboBox>
+'@
+$motionNew = @'
+                            <StackPanel Grid.Column="1">
+                                <ComboBox x:Name="MotionBox" SelectedIndex="0">
+                                    <ComboBoxItem Content="Native cadence" Tag="Off" ToolTip="Keep the source frame cadence. No interpolation."/>
+                                    <ComboBoxItem Content="Gentle smooth motion" Tag="Gentle" ToolTip="Light interpolation to reduce judder while keeping a more natural look."/>
+                                    <ComboBoxItem Content="Smooth motion" Tag="Smooth" ToolTip="Stronger interpolation for maximum smoothness; may create a soap-opera look."/>
+                                </ComboBox>
+                                <TextBlock Text="Native — no interpolation  •  Gentle — lighter smoothing  •  Smooth — strongest smoothing"
+                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
+                            </StackPanel>
+'@
+Replace-Exact $xaml $motionOld $motionNew
+
+$checksOld = @'
+                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                <CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0"/>
+                                <CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR"/>
+                            </StackPanel>
+'@
+$checksNew = @'
+                            <StackPanel Grid.Column="3" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0" ToolTip="Reduce visible banding and compression artefacts in rough encodes."/>
+                                    <CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR" ToolTip="Experimental NVIDIA HDR enhancement. Never enabled automatically."/>
+                                </StackPanel>
+                                <TextBlock Text="Cleanup — reduces banding/compression artefacts  •  RTX HDR — experimental NVIDIA HDR enhancement"
+                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
+                            </StackPanel>
+'@
+Replace-Exact $xaml $checksOld $checksNew
+
+$oldHint = '                        <TextBlock Text="Reference keeps source motion and colour intent. Smooth Motion deliberately interpolates frames and may create a soap-opera look. RTX options are never enabled automatically." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>'
+$newHint = '                        <TextBlock Text="Reference mode never enables interpolation, cleanup, RTX Video HDR, or RTX Super Resolution behind your back." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>'
+Replace-Exact $xaml $oldHint $newHint
+
+# ---------------------------------------------------------------------------
+# Built-in integration regression coverage
+# ---------------------------------------------------------------------------
+# Use small exact replacements rather than one multiline block so this remains
+# insensitive to CRLF/LF differences in the reconstructed source.
+Replace-Exact $program '                !Has(enhanced, "--video-sync=display-resample") ||' "                !Has(enhanced, \"--video-sync=display-resample\") ||`r`n                !Has(enhanced, \"--video-sync-max-factor=10\") ||"
+Replace-Exact $program '                !Has(enhanced, "--interpolation=yes") ||' "                !Has(enhanced, \"--interpolation=yes\") ||`r`n                !Has(enhanced, \"--tscale=linear\") ||"
+Replace-Exact $program '                !Has(enhanced, "--deband=yes"))' '                !Has(enhanced, "--deband=yes") || Has(enhanced, "--video-sync-max-factor=12"))'
+
+$compatMarker = '            var compatibility = await backend.GetPlaybackPlanAsync('
+$gentleBlock = @'
             var gentle = await backend.GetPlaybackPlanAsync(
                 syntheticUrl, new PlaybackOptions("Automatic", "Off", "Gentle", false, false));
             if (!Has(gentle, "--video-sync=display-resample") ||
@@ -83,29 +165,43 @@ $replacement = @'
                 Has(gentle, "--video-sync-max-factor=12"))
                 return 24;
 
+            var compatibility = await backend.GetPlaybackPlanAsync(
 '@
-$programText = [regex]::Replace($programText, $enhancedPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement }, 1)
-Write-Utf8NoBom $program $programText
+Replace-Exact $program $compatMarker $gentleBlock
 
-# Fail closed on the actual regression and version contract.
+# ---------------------------------------------------------------------------
+# Fail closed verification
+# ---------------------------------------------------------------------------
 $verifyEngine = Read-Text $engine
-if ($verifyEngine -match '--video-sync-max-factor=12') { throw 'Invalid motion max-factor 12 remains after hotfix.' }
+if ($verifyEngine -match '--video-sync-max-factor=12') { throw 'Invalid motion max-factor 12 remains in the engine.' }
 if (([regex]::Matches($verifyEngine, [regex]::Escape('--video-sync-max-factor=10'))).Count -ne 2) {
     throw 'Expected both Gentle and Smooth motion lanes to use max-factor 10.'
 }
+
+$verifyProgram = Read-Text $program
+foreach ($needle in @(
+    'new PlaybackOptions("Automatic", "Off", "Gentle", false, false)',
+    '--video-sync-max-factor=10',
+    '--tscale=oversample',
+    '--tscale=linear'
+)) {
+    if (-not $verifyProgram.Contains($needle)) { throw "0.3.1 integration gate is missing: $needle" }
+}
+
+$verifyXaml = Read-Text $xaml
+foreach ($needle in @(
+    'Automatic — sensible defaults',
+    'High quality — EWA Lanczos Sharp',
+    'Gentle — lighter smoothing',
+    'Cleanup — reduces banding/compression artefacts',
+    'Text="v0.3.1"'
+)) {
+    if (-not $verifyXaml.Contains($needle)) { throw "0.3.1 launcher explanation is missing: $needle" }
+}
+
 $verifyIss = Read-Text $iss
 if ($verifyIss -notmatch '#define MyAppVersion "0\.3\.1"' -or $verifyIss -notmatch 'VersionInfoVersion=0\.3\.1\.0') {
     throw '0.3.1 installer version verification failed.'
 }
-$verifyProgram = Read-Text $program
-if ($verifyProgram -notmatch 'new PlaybackOptions\("Automatic", "Off", "Gentle"' -or
-    $verifyProgram -notmatch '--video-sync-max-factor=10' -or
-    $verifyProgram -match 'Has\(gentle, "--video-sync-max-factor=12"\)\s*\)\s*return 24;\s*\}') {
-    # The final clause above is intentionally conservative; the literal 12 is allowed
-    # only inside the test assertion that rejects it, never in the engine launch plan.
-}
-if ($verifyProgram -notmatch 'new PlaybackOptions\("Automatic", "Off", "Gentle"' -or $verifyProgram -notmatch '--tscale=oversample') {
-    throw '0.3.1 Gentle motion integration regression coverage was not installed.'
-}
 
-Write-Host 'Adaptive Media 0.3.1 motion hotfix applied and verified.'
+Write-Host 'Adaptive Media 0.3.1 motion hotfix, launcher explanations, and regression coverage applied and verified.'
