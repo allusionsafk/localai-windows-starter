@@ -9,6 +9,7 @@ on:
       - adaptive-media/Test-0.3.2-Hardware.ps1
       - adaptive-media/Test-0.3.2-Hardware.cmd
       - adaptive-media/Apply-0.3.2-Dev4.ps1
+      - adaptive-media/Apply-0.3.2-Dev5.ps1
 
 permissions:
   contents: read
@@ -40,7 +41,7 @@ jobs:
           choco install innosetup --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
 
-      - name: Reconstruct reviewed source and apply 0.3.2 dev4 patch stack
+      - name: Reconstruct reviewed source and apply 0.3.2 dev5 patch stack
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -65,6 +66,7 @@ jobs:
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev3.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev4.ps1') -SourceRoot $src -CertificationRoot $mediaDir
+          & (Join-Path $mediaDir 'Apply-0.3.2-Dev5.ps1') -SourceRoot $src
           Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
 
       - name: Verify renderer, deterministic integration, and bundled certification assumptions
@@ -86,7 +88,7 @@ jobs:
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX VPP gpu-context=d3d11 override missing or duplicated.' }
           if ($engineText -notmatch [regex]::Escape("`$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-api=d3d11') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) { throw 'D3D11 FIFO guard missing.' }
           if (([regex]::Matches($engineText, 'ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')).Count -ne 1) { throw 'Engine deterministic probe hook missing or duplicated.' }
-          if (([regex]::Matches($engineText, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 1) { throw 'Engine deterministic NVIDIA hook missing or duplicated.' }
+          if (([regex]::Matches($engineText, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 2) { throw 'Engine deterministic NVIDIA hooks missing or duplicated (expected the per-video hook plus the profile-decision hook).' }
           if (([regex]::Matches($backendText, 'ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')).Count -ne 1) { throw 'BackendBridge deterministic probe handoff missing or duplicated.' }
           if (([regex]::Matches($backendText, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 1) { throw 'BackendBridge deterministic NVIDIA handoff missing or duplicated.' }
           foreach ($needle in @('syntheticSdr1080Probe','new PlaybackOptions("Enhanced", "RtxVsr", "Smooth", false, true)','nvidia-true-hdr=yes','scaling-mode=nvidia')) {
@@ -100,9 +102,17 @@ jobs:
           $contextIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
           $fifoDecisionIndex = $engineText.IndexOf('$finalUsesD3d11 =')
           if ($apiIndex -lt 0 -or $contextIndex -le $apiIndex -or $fifoDecisionIndex -le $contextIndex) { throw 'RTX D3D11 pairing/final FIFO ordering is invalid.' }
+          if ($engineText -match [regex]::Escape("if (Test-NvidiaGpuPresent -and")) { throw 'A command-mode NVIDIA guard remains; the Compatibility escape hatch would silently inherit --profile=nvidia.' }
+          if (([regex]::Matches($engineText, [regex]::Escape("if ((Test-NvidiaGpuPresent) -and `$profile -ne 'compatibility') {"))).Count -ne 1) { throw 'Interactive NVIDIA profile guard missing or duplicated.' }
+          if (([regex]::Matches($engineText, [regex]::Escape("if (((Test-NvidiaGpuPresent) -or `$integrationNvidiaProfile) -and `$profile -ne 'compatibility')"))).Count -ne 1) { throw 'Headless NVIDIA profile guard missing or duplicated.' }
+          foreach ($needle in @('compatibilityOnNvidia','enhancedOnNvidia','return 27;','return 28;')) {
+            if (-not $programText.Contains($needle)) { throw "Compatibility renderer regression coverage missing: $needle" }
+          }
+          if (([regex]::Matches($programText, [regex]::Escape('integrationNvidia: true'))).Count -ne 3) { throw 'Expected exactly three simulated-NVIDIA integration plans.' }
           Write-Host 'Renderer-aware motion + deterministic RTX integration + bundled certification assumptions: PASS'
+          Write-Host 'Compatibility D3D11 escape hatch guard + deterministic NVIDIA-profile coverage: PASS'
 
-      - name: Build and isolated smoke-test 0.3.2-dev4
+      - name: Build and isolated smoke-test 0.3.2-dev5
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -120,20 +130,20 @@ jobs:
             throw
           }
 
-      - name: Verify 0.3.2-dev4 candidate
+      - name: Verify 0.3.2-dev5 candidate
         id: artifact
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
           $dist = Join-Path $root 'dist'
-          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev4-x64.exe'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev5-x64.exe'
           $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
           $input = Join-Path $root 'payload\mpv-config\input.conf'
           $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
           $stageCertPs1 = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.ps1'
           $stageCertCmd = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.cmd'
-          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev4 installer was not produced.' }
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev5 installer was not produced.' }
           if (-not (Test-Path -LiteralPath $stageCertPs1 -PathType Leaf) -or -not (Test-Path -LiteralPath $stageCertCmd -PathType Leaf)) { throw 'Staged hardware certification files are missing.' }
           $engineText = [IO.File]::ReadAllText($engine)
           $inputText = [IO.File]::ReadAllText($input)
@@ -152,16 +162,16 @@ jobs:
             'nvidia-true-hdr=yes'
           )) { if (-not $programText.Contains($needle)) { throw "Integration coverage missing: $needle" } }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
-          "$hash  AdaptiveMediaSetup-0.3.2-dev4-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev4-x64.sha256.txt') -Encoding ascii
+          "$hash  AdaptiveMediaSetup-0.3.2-dev5-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev5-x64.sha256.txt') -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_OUTPUT
-          Write-Host "0.3.2-dev4 candidate SHA-256: $hash"
+          Write-Host "0.3.2-dev5 candidate SHA-256: $hash"
 
       - name: Upload private dev artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AdaptiveMedia-0.3.2-dev4-x64
+          name: AdaptiveMedia-0.3.2-dev5-x64
           path: |
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev4-x64.exe
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev4-x64.sha256.txt
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev5-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev5-x64.sha256.txt
           if-no-files-found: error
           retention-days: 14
