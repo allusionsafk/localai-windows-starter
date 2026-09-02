@@ -2,15 +2,15 @@ Adaptive Media 0.3.2 development build trigger
 
 Scope:
 - ESC must leave fullscreen without quitting playback
-- Gentle/Smooth motion explicitly use Vulkan FIFO presentation for display-sync
+- Gentle/Smooth motion use Vulkan FIFO only when the completed launch plan remains Vulkan
+- Compatibility and RTX VPP D3D11 plans must not receive the Vulkan FIFO option
 - diagnostics capture mpv UTF-8 output without PowerShell 5.1 console mojibake
 - diagnostics label multi-adapter / NVIDIA+Intel topology as an informational hint only
 - 0.3.1 remains the frozen friend-test release
 
-Current compatibility review:
-- inspect reconstructed mpv graphics profiles and engine context selection
-- prove a Vulkan-only FIFO option cannot poison a D3D11/Compatibility fallback path
-
-Validation target:
+Dev2 validation target:
+- renderer-aware final motion-plan decision
+- Compatibility + Smooth integration regression
+- RTX D3D11 override must precede the FIFO decision
 - full private build/self-test/integration/install/uninstall gate
 - no public tag or release
