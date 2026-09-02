@@ -39,12 +39,17 @@ $input   = Join-Path $SourceRoot 'payload\mpv-config\input.conf'
 # Integration-only media capability injection.
 # ---------------------------------------------------------------------------
 # PlanJson already exists solely to expose the final launch plan to the compiled
-# WPF integration harness. Allow that same non-playback path to supply a fake
-# media probe and fake NVIDIA capability through child-process environment
-# variables. Normal playback never sees these values because the engine accepts
-# them only while PlanJson is active, and PlayAsync never sets them.
-$oldProbe = '    $probe = if (-not (Test-IsUrl $first)) { Probe-Media $mpv $first } else { $null }'
-$newProbe = @'
+# WPF integration harness. Allow only Play-MediaHeadless/PlanJson to supply a
+# fake media probe and fake NVIDIA capability through child-process environment
+# variables. The earlier interactive Play-Media probe assignment is deliberately
+# left untouched, so normal playback can never consume the synthetic probe.
+$engineText = Read-Text $engine
+$headlessProbePattern = '(?ms)(function Play-MediaHeadless \{.*?\$first = \$expanded\[0\]\r?\n)    \$probe = if \(-not \(Test-IsUrl \$first\)\) \{ Probe-Media \$mpv \$first \} else \{ \$null \}'
+$headlessProbeMatches = [regex]::Matches($engineText, $headlessProbePattern)
+if ($headlessProbeMatches.Count -ne 1) {
+    throw "Expected exactly one Play-MediaHeadless probe assignment; found $($headlessProbeMatches.Count)."
+}
+$newProbeBody = @'
     $integrationProbeJson = if ($PlanJson) { [Environment]::GetEnvironmentVariable('ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON') } else { $null }
     $probe = if (-not [string]::IsNullOrWhiteSpace($integrationProbeJson)) {
         try { $integrationProbeJson | ConvertFrom-Json -ErrorAction Stop }
@@ -53,7 +58,13 @@ $newProbe = @'
     elseif (-not (Test-IsUrl $first)) { Probe-Media $mpv $first }
     else { $null }
 '@
-Replace-Exact $engine $oldProbe $newProbe
+$engineText = [regex]::Replace(
+    $engineText,
+    $headlessProbePattern,
+    { param($m) $m.Groups[1].Value + $newProbeBody },
+    1
+)
+Write-Utf8NoBom $engine $engineText
 
 $oldNvidia = @'
     $nvidia = Test-NvidiaGpuPresent
@@ -140,6 +151,12 @@ foreach ($needle in @(
 }
 if (([regex]::Matches($verifyEngine, 'ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')).Count -ne 1) { throw 'Integration probe environment hook duplicated.' }
 if (([regex]::Matches($verifyEngine, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 1) { throw 'Integration NVIDIA environment hook duplicated.' }
+if (([regex]::Matches($verifyEngine, [regex]::Escape('    $probe = if (-not (Test-IsUrl $first)) { Probe-Media $mpv $first } else { $null }'))).Count -ne 1) {
+    throw 'Interactive Play-Media probe assignment was changed; integration injection must remain headless-only.'
+}
+$headlessIndex = $verifyEngine.IndexOf('function Play-MediaHeadless {')
+$integrationProbeIndex = $verifyEngine.IndexOf('ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')
+if ($headlessIndex -lt 0 -or $integrationProbeIndex -le $headlessIndex) { throw 'Synthetic probe hook is not scoped inside Play-MediaHeadless.' }
 
 $verifyBackend = Read-Text $backend
 if (-not $verifyBackend.Contains('string? integrationProbeJson = null, bool integrationNvidia = false')) { throw 'BackendBridge integration-only optional arguments missing.' }
