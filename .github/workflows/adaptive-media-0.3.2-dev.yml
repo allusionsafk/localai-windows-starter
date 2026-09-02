@@ -60,8 +60,20 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-Location (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source')
-          .\scripts\Build-Dev.ps1 -Clean -SmokeTest
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          try {
+            .\scripts\Build-Dev.ps1 -Clean -SmokeTest
+            if ($LASTEXITCODE -ne 0) { throw "Build-Dev returned exit code $LASTEXITCODE" }
+          } catch {
+            $devError = Join-Path $env:TEMP 'AdaptiveMedia-0.3.2-integration-error.txt'
+            if (Test-Path -LiteralPath $devError) {
+              Write-Host '--- 0.3.2 integration exception ---'
+              Write-Host (Get-Content -LiteralPath $devError -Raw)
+              Write-Host '--- end integration exception ---'
+            } else {
+              Write-Host 'No dev integration exception file was produced.'
+            }
+            throw
+          }
 
       - name: Verify 0.3.2-dev1 candidate
         id: artifact
