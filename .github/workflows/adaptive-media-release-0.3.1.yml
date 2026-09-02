@@ -102,3 +102,17 @@ jobs:
             -Checksum '${{ steps.artifact.outputs.checksum }}' `
             -Repo $env:GITHUB_REPOSITORY `
             -Target $env:GITHUB_SHA
+
+      - name: Pin release tag to validated build commit
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git tag -f v0.3.1 $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create local v0.3.1 tag.' }
+          git push origin refs/tags/v0.3.1 --force
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to pin remote v0.3.1 tag.' }
+          $remoteLine = git ls-remote origin refs/tags/v0.3.1
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($remoteLine)) { throw 'Unable to verify remote v0.3.1 tag.' }
+          $remoteSha = ($remoteLine -split '\s+')[0]
+          if ($remoteSha -ne $env:GITHUB_SHA) { throw "v0.3.1 tag mismatch: expected=$env:GITHUB_SHA actual=$remoteSha" }
+          Write-Host "v0.3.1 tag verified at validated build commit $remoteSha"
