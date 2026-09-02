@@ -3,12 +3,10 @@ Adaptive Media 0.3.2 development build trigger
 Scope:
 - ESC must leave fullscreen without quitting playback
 - Gentle/Smooth motion explicitly use Vulkan FIFO presentation for display-sync
+- diagnostics capture mpv UTF-8 output without PowerShell 5.1 console mojibake
+- diagnostics label multi-adapter / NVIDIA+Intel topology as an informational hint only
 - 0.3.1 remains the frozen friend-test release
 
-Dev1 state:
-- build/self-test/integration/install/uninstall gate is green
-- candidate functionality remains private / hardware-unverified
-
-Next inspection:
-- print the PowerShell engine diagnostics/external-process path that generates mpv version text
-- patch the real UTF-8 decoding boundary rather than guessing in WPF
+Validation target:
+- full private build/self-test/integration/install/uninstall gate
+- no public tag or release
