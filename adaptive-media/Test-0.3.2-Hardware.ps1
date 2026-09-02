@@ -272,8 +272,8 @@ param([string]$A,[string]$B,[string]$C)
         $want = @('alpha beta','quote"inside','C:\path with spaces\')
         $run = Invoke-Captured -FilePath $ps -Arguments @('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$temp,'-A',$want[0],'-B',$want[1],'-C',$want[2]) -TimeoutSeconds 20
         if ($run.ExitCode -ne 0) { throw ("Argument quoting child failed: {0}" -f $run.StdErr) }
-        $got = @($run.StdOut | ConvertFrom-Json)
-        if ($got.Count -ne 3) { throw 'Argument quoting self-test returned wrong count.' }
+        $got = $run.StdOut | ConvertFrom-Json
+        if ($null -eq $got -or $got.Count -ne 3) { throw ("Argument quoting self-test returned wrong count. Raw: {0}" -f $run.StdOut) }
         for ($i=0; $i -lt 3; $i++) { if ([string]$got[$i] -ne [string]$want[$i]) { throw "Argument quoting mismatch at index $i." } }
         $q = [AdaptiveMediaHardwareNative]::Quote('ends in slash\')
         if ([string]::IsNullOrWhiteSpace($q)) { throw 'Argument quote helper returned empty output.' }
