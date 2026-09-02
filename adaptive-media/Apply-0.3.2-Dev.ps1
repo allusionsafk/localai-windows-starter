@@ -48,57 +48,60 @@ if ($activeEsc.Count -gt 0) {
 Write-Utf8NoBom $input $inputText
 
 # ---------------------------------------------------------------------------
-# 0.3.2 dev: make display-sync presentation renderer-aware.
+# 0.3.2 dev: renderer-aware display-sync presentation and RTX D3D11 pairing.
 # ---------------------------------------------------------------------------
-# mpv requires a vsync-blocked Vulkan swapchain for display-* video-sync modes.
-# The managed default renderer is Vulkan and the NVIDIA profile is explicit
-# winvk, but Compatibility and NVIDIA RTX VPP intentionally select D3D11.
-# Therefore FIFO belongs at the end of enhancement planning, after all renderer
-# overrides are known, not inside the early Gentle/Smooth branches.
+# mpv requires a vsync-blocked Vulkan swapchain for display-* sync. The managed
+# default is Vulkan and the NVIDIA profile is explicit winvk. Compatibility is
+# explicit D3D11, while RTX VSR/HDR invokes d3d11vpp and therefore must switch
+# BOTH gpu-api and gpu-context to D3D11. Decide FIFO only after those overrides.
 $engineText = Read-Text $engine
 $displayAddPattern = '(?m)^\s*\$MpvArgs\.Add\(''--video-sync=display-resample''\)\s*$'
 if (([regex]::Matches($engineText, $displayAddPattern)).Count -ne 2) {
     throw 'Expected exactly two display-resample motion lanes after 0.3.1.'
 }
 
-$vppTail = @'
-    if ($vpp.Count -gt 0) {
-        # d3d11vpp is intentionally an opt-in path because the validated reference
-        # path on hybrid NVIDIA laptops is winvk + NVDEC. RTX VSR/HDR require D3D11 VPP.
-        $MpvArgs.Add('--gpu-context=d3d11')
-        $MpvArgs.Add('--hwdec=d3d11va,auto')
-        $MpvArgs.Add('--vf=d3d11vpp=' + ($vpp -join ':'))
-    }
+$vppPattern = '(?ms)^    if \(\$vpp\.Count -gt 0\) \{\r?\n        # d3d11vpp is intentionally an opt-in path because the validated reference\r?\n        # path on hybrid NVIDIA laptops is winvk \+ NVDEC\. RTX VSR/HDR require D3D11 VPP\.\r?\n        \$MpvArgs\.Add\(''--gpu-context=d3d11''\)\r?\n        \$MpvArgs\.Add\(''--hwdec=d3d11va,auto''\)\r?\n        \$MpvArgs\.Add\(''--vf=d3d11vpp='' \+ \(\$vpp -join '':''\)\)\r?\n    \}\r?\n(?=\})'
+$vppMatches = [regex]::Matches($engineText, $vppPattern)
+if ($vppMatches.Count -ne 1) {
+    throw "Expected one bounded RTX d3d11vpp tail; found $($vppMatches.Count)."
 }
-'@
-$vppTailWithPresentation = @'
+$vppReplacement = @'
     if ($vpp.Count -gt 0) {
         # d3d11vpp is intentionally an opt-in path because the validated reference
         # path on hybrid NVIDIA laptops is winvk + NVDEC. RTX VSR/HDR require D3D11 VPP.
+        # Pair API and context explicitly so inherited Vulkan settings cannot conflict.
+        $MpvArgs.Add('--gpu-api=d3d11')
         $MpvArgs.Add('--gpu-context=d3d11')
         $MpvArgs.Add('--hwdec=d3d11va,auto')
         $MpvArgs.Add('--vf=d3d11vpp=' + ($vpp -join ':'))
     }
 
-    # Decide presentation mode only after every optional renderer override is known.
-    # Compatibility is explicit D3D11 through mpv.conf. RTX VPP adds an explicit
-    # D3D11 context above. All other managed motion paths retain the Vulkan default.
+    # Decide presentation only after every optional renderer override is known.
     $motionUsesDisplaySync = ($Motion -eq 'Gentle' -or $Motion -eq 'Smooth')
-    $finalUsesD3d11 = $MpvArgs.Contains('--profile=compatibility') -or $MpvArgs.Contains('--gpu-context=d3d11')
+    $finalUsesD3d11 = $MpvArgs.Contains('--profile=compatibility') -or $MpvArgs.Contains('--gpu-api=d3d11') -or $MpvArgs.Contains('--gpu-context=d3d11')
     if ($motionUsesDisplaySync -and -not $finalUsesD3d11) {
         $MpvArgs.Add('--vulkan-swap-mode=fifo')
     }
-}
 '@
-Replace-Exact $engine $vppTail $vppTailWithPresentation
+$engineText = [regex]::Replace($engineText, $vppPattern, $vppReplacement, 1)
+Write-Utf8NoBom $engine $engineText
+
+# Correct a stale source comment from the older auto-backend design.
+$engineText = Read-Text $engine
+$oldNvidiaCommentPattern = '(?m)^    # NVIDIA policy is capability-based, not model-specific\. Prefer NVDEC while\r?\n    # leaving gpu-next''s Windows graphics backend on auto so Optimus/MUX/Advanced\r?\n    # Optimus and externally wired displays can use the path that actually works\.$'
+$newNvidiaComment = @'
+    # NVIDIA policy is capability-based, not model-specific. The managed NVIDIA
+    # profile selects the validated winvk + NVDEC path; Compatibility remains the
+    # explicit D3D11 escape hatch for systems where that path is unsuitable.
+'@
+if (([regex]::Matches($engineText, $oldNvidiaCommentPattern)).Count -eq 1) {
+    $engineText = [regex]::Replace($engineText, $oldNvidiaCommentPattern, $newNvidiaComment, 1)
+    Write-Utf8NoBom $engine $engineText
+}
 
 # ---------------------------------------------------------------------------
 # 0.3.2 dev: decode native UTF-8 tool output explicitly in diagnostics.
 # ---------------------------------------------------------------------------
-# Windows PowerShell 5.1 decodes direct native-pipeline output through the
-# console code page. mpv emits UTF-8, so C2 A9 (copyright sign) was shown as
-# CP437 box-drawing glyphs. Capture native stdout through ProcessStartInfo and
-# explicitly request UTF-8 decoding instead.
 $diagMarker = 'function Write-Diagnostics {'
 $utf8Helper = @'
 function Get-NativeUtf8FirstLine {
@@ -142,8 +145,6 @@ $oldMpvVersion = '    if ($mpv) { try { $lines.Add(''MPV version: '' + ((& $mpv 
 $newMpvVersion = '    if ($mpv) { try { $lines.Add(''MPV version: '' + (Get-NativeUtf8FirstLine $mpv @(''--no-config'',''--version''))) } catch {} }'
 Replace-Exact $engine $oldMpvVersion $newMpvVersion
 
-# Make multi-adapter diagnostics useful without pretending Win32_VideoController
-# proves active display ownership. This is only an informational topology hint.
 $oldGpuDiag = '    try { $lines.Add(''GPU(s): '' + ((Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name + '' driver '' + $_.DriverVersion }) -join ''; '')) } catch {}'
 $newGpuDiag = @'
     try {
@@ -162,6 +163,10 @@ $newGpuDiag = @'
     } catch {}
 '@
 Replace-Exact $engine $oldGpuDiag $newGpuDiag
+
+$oldPolicy = '    $lines.Add(''Playback policy: reference sync=audio; NVIDIA present='' + (Test-NvidiaGpuPresent) + ''; NVIDIA context priority=winvk,d3d11; decoder priority=nvdec,d3d11va,auto'')'
+$newPolicy = '    $lines.Add(''Playback policy: reference sync=audio; NVIDIA present='' + (Test-NvidiaGpuPresent) + ''; NVIDIA=winvk + nvdec,auto-safe; Compatibility=d3d11 + d3d11va-copy,auto-safe; RTX VPP=d3d11 API/context'')'
+Replace-Exact $engine $oldPolicy $newPolicy
 
 # ---------------------------------------------------------------------------
 # 0.3.2 dev2 version metadata. This remains an internal candidate.
@@ -208,8 +213,6 @@ $compatSmooth = @'
 '@
 Replace-Exact $program $compatMarker ($compatSmooth + $compatMarker)
 
-# The stable integration harness writes exceptions to stderr, but WinExe smoke
-# invocation can hide that stream. Persist the dev exception for Actions.
 $catchNeedle = '            Console.Error.WriteLine(ex);'
 $catchNew = $catchNeedle + [Environment]::NewLine + '            try { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AdaptiveMedia-0.3.2-integration-error.txt"), ex.ToString()); } catch { }'
 Replace-Exact $program $catchNeedle $catchNew
@@ -222,19 +225,19 @@ if ($verifyInput -notmatch '(?m)^ESC\s+set\s+fullscreen\s+no\s*$') { throw '0.3.
 if ($verifyInput -match '(?im)^\s*ESC\s+.*\bquit(?:-watch-later)?\b') { throw '0.3.2 dev still contains an ESC quit binding.' }
 
 $verifyEngine = Read-Text $engine
-if (([regex]::Matches($verifyEngine, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 1) {
-    throw 'Renderer-aware 0.3.2 must add Vulkan FIFO exactly once, after final renderer selection.'
-}
-if (-not $verifyEngine.Contains("`$finalUsesD3d11 = `$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) {
-    throw 'Renderer-aware FIFO D3D11 guard is missing.'
-}
-$idxVpp = $verifyEngine.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
+if (([regex]::Matches($verifyEngine, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 1) { throw 'Renderer-aware FIFO must have exactly one final add site.' }
+if (([regex]::Matches($verifyEngine, [regex]::Escape(".Add('--gpu-api=d3d11')"))).Count -ne 1) { throw 'RTX VPP must explicitly override gpu-api to d3d11 exactly once.' }
+if (([regex]::Matches($verifyEngine, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX VPP must explicitly override gpu-context to d3d11 exactly once.' }
+if (-not $verifyEngine.Contains("`$finalUsesD3d11 = `$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-api=d3d11') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) { throw 'Renderer-aware D3D11 FIFO guard is missing.' }
+$idxApi = $verifyEngine.IndexOf("`$MpvArgs.Add('--gpu-api=d3d11')")
+$idxContext = $verifyEngine.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
 $idxFifoGuard = $verifyEngine.IndexOf('$finalUsesD3d11 =')
-if ($idxVpp -lt 0 -or $idxFifoGuard -le $idxVpp) { throw 'FIFO decision must occur after the RTX D3D11 override.' }
+if ($idxApi -lt 0 -or $idxContext -le $idxApi -or $idxFifoGuard -le $idxContext) { throw 'RTX D3D11 API/context and FIFO-decision ordering is invalid.' }
 if ($verifyEngine -match '--video-sync-max-factor=12') { throw 'Invalid 0.3.0 motion max-factor 12 reappeared.' }
 if (-not $verifyEngine.Contains('StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)')) { throw '0.3.2 diagnostics UTF-8 decoding is missing.' }
 if ($verifyEngine.Contains('& $mpv --no-config --version')) { throw 'Diagnostics still pipes mpv version through the PowerShell console code page.' }
 if (-not $verifyEngine.Contains('Graphics topology hint: ')) { throw '0.3.2 multi-adapter diagnostics hint is missing.' }
+if ($verifyEngine.Contains('NVIDIA context priority=winvk,d3d11')) { throw 'Stale diagnostics still claims a nonexistent NVIDIA context fallback.' }
 
 $verifyProgram = Read-Text $program
 foreach ($needle in @(
@@ -244,8 +247,6 @@ foreach ($needle in @(
 )) {
     if (-not $verifyProgram.Contains($needle)) { throw "0.3.2 integration gate is missing: $needle" }
 }
-if (([regex]::Matches($verifyProgram, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -lt 3) {
-    throw '0.3.2 integration coverage must assert FIFO presence for Vulkan motion and absence for Compatibility motion.'
-}
+if (([regex]::Matches($verifyProgram, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -lt 3) { throw 'Integration coverage must assert FIFO presence for Vulkan motion and absence for Compatibility motion.' }
 
-Write-Host 'Adaptive Media 0.3.2-dev2 renderer-aware motion, fullscreen, and diagnostics fixes applied and verified.'
+Write-Host 'Adaptive Media 0.3.2-dev2 renderer-aware motion, RTX D3D11 pairing, fullscreen, and diagnostics fixes applied and verified.'
