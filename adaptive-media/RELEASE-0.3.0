@@ -1,2 +1,2 @@
 trigger stable 0.3.0 Windows build, isolated smoke validation, and GitHub release
-retry: fixed headless launch-plan JSON pipeline contract
+retry: line-ending-agnostic headless launch-plan integration fix
