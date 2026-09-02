@@ -37,7 +37,8 @@ jobs:
           $mediaDir = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media'
           $zipPath = Join-Path $env:RUNNER_TEMP 'AdaptiveMedia-0.3.0-Source.zip'
           $src = Join-Path $mediaDir 'source'
-          $hashText = (Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw).Trim()
+          $hashText = Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw
+          $hashText = ($hashText -replace [char]0xFEFF, '').Trim()
           if ($hashText.Length -lt 64) { throw 'Stable source checksum file is too short.' }
           $expected = $hashText.Substring(0,64).ToLowerInvariant()
           if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid stable source SHA-256 text: $expected" }
