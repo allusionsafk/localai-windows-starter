@@ -1,0 +1,98 @@
+name: Adaptive Media 0.3.2 Dev
+
+on:
+  push:
+    branches:
+      - adaptive-media-dev
+    paths:
+      - adaptive-media/DEV-0.3.2
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-dev:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+
+      - name: Reconstruct reviewed source and apply 0.3.2 dev patch stack
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mediaDir = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'AdaptiveMedia-0.3.0-Source.zip'
+          $src = Join-Path $mediaDir 'source'
+          $hashText = Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw
+          $hashText = ($hashText -replace [char]0xFEFF, '').Trim()
+          $expected = $hashText.Substring(0,64).ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid stable source SHA-256 text: $expected" }
+          $parts = @(Get-ChildItem -LiteralPath $mediaDir -Filter 'AdaptiveMedia-0.3.0-Source.part*.b64' -File | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 source transport parts; found $($parts.Count)." }
+          $encoded = ($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Stable source archive hash mismatch: expected=$expected actual=$actual" }
+          Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $src | Out-Null
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $src -Force
+          & (Join-Path $mediaDir 'Apply-Stable-Hotfix.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
+          Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
+
+      - name: Build and isolated smoke-test 0.3.2-dev1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source')
+          .\scripts\Build-Dev.ps1 -Clean -SmokeTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify 0.3.2-dev1 candidate
+        id: artifact
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
+          $dist = Join-Path $root 'dist'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev1-x64.exe'
+          $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
+          $input = Join-Path $root 'payload\mpv-config\input.conf'
+          $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev1 installer was not produced.' }
+          $engineText = [IO.File]::ReadAllText($engine)
+          $inputText = [IO.File]::ReadAllText($input)
+          $programText = [IO.File]::ReadAllText($program)
+          if (([regex]::Matches($engineText, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -ne 2) { throw 'Both motion lanes must use Vulkan FIFO.' }
+          if ($inputText -notmatch '(?m)^ESC\s+set\s+fullscreen\s+no\s*$') { throw 'Managed ESC fullscreen binding missing.' }
+          if ($inputText -match '(?im)^\s*ESC\s+.*\bquit(?:-watch-later)?\b') { throw 'ESC quit binding remains.' }
+          if (([regex]::Matches($programText, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -lt 2) { throw 'Integration coverage for both FIFO motion lanes missing.' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
+          "$hash  AdaptiveMediaSetup-0.3.2-dev1-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev1-x64.sha256.txt') -Encoding ascii
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Host "0.3.2-dev1 candidate SHA-256: $hash"
+
+      - name: Upload private dev artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdaptiveMedia-0.3.2-dev1-x64
+          path: |
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev1-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev1-x64.sha256.txt
+          if-no-files-found: error
+          retention-days: 14
