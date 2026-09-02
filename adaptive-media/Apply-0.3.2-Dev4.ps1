@@ -52,6 +52,20 @@ $stageNeedle = "Copy-Item (Join-Path `$Root 'payload\mpv-config') `$Stage -Recur
 $stageNew = $stageNeedle + [Environment]::NewLine + "if (Test-Path (Join-Path `$Root 'payload\certification')) { Copy-Item (Join-Path `$Root 'payload\certification') `$Stage -Recurse -Force }"
 Replace-Exact $build $stageNeedle $stageNew
 
+# Make the isolated installer smoke test prove the bundled certification files
+# survive the actual Inno install, then run the installed PS1's own PS5.1 self-test.
+$smokeNeedle = "        if (-not (Test-Path `$smokeLauncher)) { throw 'Smoke install did not create AdaptiveMedia.exe.' }"
+$smokeNew = @"
+        if (-not (Test-Path `$smokeLauncher)) { throw 'Smoke install did not create AdaptiveMedia.exe.' }
+        `$smokeCertPs1 = Join-Path `$smoke 'certification\Test-0.3.2-Hardware.ps1'
+        `$smokeCertCmd = Join-Path `$smoke 'certification\Test-0.3.2-Hardware.cmd'
+        if (-not (Test-Path -LiteralPath `$smokeCertPs1 -PathType Leaf)) { throw 'Smoke install did not include the hardware certification PS1.' }
+        if (-not (Test-Path -LiteralPath `$smokeCertCmd -PathType Leaf)) { throw 'Smoke install did not include the hardware certification CMD.' }
+        `$certSelfTest = Start-Process -FilePath (Join-Path `$env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + `$smokeCertPs1 + '"'),'-SelfTest' -Wait -PassThru
+        if (`$certSelfTest.ExitCode -ne 0) { throw "Installed hardware certification self-test failed with exit code `$(`$certSelfTest.ExitCode)." }
+"@
+Replace-Exact $build $smokeNeedle $smokeNew
+
 # Internal packaging revision only. Product semantics are unchanged from dev3.
 Replace-Exact $iss    '#define MyAppVersion "0.3.2-dev3"' '#define MyAppVersion "0.3.2-dev4"'
 Replace-Exact $proj   '<InformationalVersion>0.3.2-dev3</InformationalVersion>' '<InformationalVersion>0.3.2-dev4</InformationalVersion>'
@@ -76,6 +90,13 @@ Replace-Exact $iss $runNeedle $runNew
 # Fail closed if the candidate no longer contains exactly the intended plumbing.
 $buildText = Read-Text $build
 if (([regex]::Matches($buildText, [regex]::Escape("payload\certification"))).Count -ne 2) { throw 'Build staging certification plumbing missing or duplicated.' }
+foreach ($needle in @(
+    'certification\Test-0.3.2-Hardware.ps1',
+    'certification\Test-0.3.2-Hardware.cmd',
+    'Installed hardware certification self-test failed'
+)) {
+    if (-not $buildText.Contains($needle)) { throw "Installer smoke certification coverage missing: $needle" }
+}
 
 $issText = Read-Text $iss
 foreach ($needle in @(
