@@ -35,11 +35,17 @@ jobs:
           & (Join-Path $mediaDir 'Apply-Stable-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
-      - name: Print enhancement-plan function context
+      - name: Print headless probe and backend handoff context
         shell: powershell
         run: |
-          $engine = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source\payload\AdaptiveMedia.Engine.ps1'
+          $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
+          $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
+          $backend = Join-Path $root 'src\AdaptiveMedia.App\BackendBridge.cs'
+          $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
+          Write-Host '===== ENGINE 930-1035 ====='
           $lines = Get-Content -LiteralPath $engine
-          for ($i = 830; $i -le [Math]::Min(940, $lines.Count); $i++) {
-            '{0,4}: {1}' -f $i, $lines[$i-1]
-          }
+          for ($i = 930; $i -le [Math]::Min(1035, $lines.Count); $i++) { '{0,4}: {1}' -f $i, $lines[$i-1] }
+          Write-Host '===== BACKEND BRIDGE ====='
+          Get-Content -LiteralPath $backend
+          Write-Host '===== PROGRAM INTEGRATION ====='
+          Get-Content -LiteralPath $program
