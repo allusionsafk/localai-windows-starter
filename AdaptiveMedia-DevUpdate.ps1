@@ -45,11 +45,19 @@ function Apply-CurrentMigrations {
     if (-not (Test-Path $proj)) { throw "WPF project missing: $proj" }
     if (-not (Test-Path $build)) { throw "Build script missing: $build" }
 
-    Ensure-Using (Join-Path $appDir 'App.xaml.cs') @('using System;','using System.IO;','using System.Linq;')
+    # Namespace imports discovered by the first real Windows compile.
     Ensure-Using (Join-Path $appDir 'BackendBridge.cs') @('using System;','using System.Collections.Generic;','using System.IO;','using System.Threading.Tasks;')
     Ensure-Using (Join-Path $appDir 'MainWindow.xaml.cs') @('using System;','using System.Collections.Generic;','using System.Linq;','using System.Threading.Tasks;')
     Ensure-Using (Join-Path $appDir 'SettingsStore.cs') @('using System;','using System.IO;')
     Ensure-Using (Join-Path $appDir 'UrlDialog.xaml.cs') @('using System;')
+
+    # App.xaml already generates the AdaptiveMedia.App type. Keep its C#
+    # code-behind empty and put ALL startup logic in Program. This avoids a
+    # duplicate App declaration while still retaining the XAML resources.
+    Write-Utf8NoBom (Join-Path $appDir 'App.xaml.cs') @'
+// Intentionally empty. App.xaml generates AdaptiveMedia.App.
+// Startup and --self-test handling live in Program.cs.
+'@
 
     $program = @'
 using System;
@@ -75,6 +83,11 @@ internal static class Program
 
         var app = new App();
         app.InitializeComponent();
+
+        var window = new MainWindow(args);
+        app.MainWindow = window;
+        window.Show();
+
         return app.Run();
     }
 }
@@ -94,7 +107,20 @@ internal static class Program
     }
     Write-Utf8NoBom $proj $xml
 
+    # WPF generated sources live under obj. Remove every old generated file
+    # whenever migrations change App/Program startup semantics.
+    Remove-Item -Recurse -Force (Join-Path $appDir 'bin'),(Join-Path $appDir 'obj') -ErrorAction SilentlyContinue
+
+    # Make the canonical build gates wait for the actual WinExe process.
     $b = [IO.File]::ReadAllText($build)
+    $oldClean = @'
+if ($Clean) { Remove-Item -Recurse -Force $Build,$Dist -ErrorAction SilentlyContinue }
+'@
+    $newClean = @'
+if ($Clean) { Remove-Item -Recurse -Force $Build,$Dist,(Join-Path $Root 'src\AdaptiveMedia.App\bin'),(Join-Path $Root 'src\AdaptiveMedia.App\obj') -ErrorAction SilentlyContinue }
+'@
+    if ($b.Contains($oldClean)) { $b = $b.Replace($oldClean,$newClean) }
+
     $oldStage = @'
 Step 'Launcher self-test'
 & (Join-Path $Stage 'AdaptiveMedia.exe') --self-test
@@ -121,34 +147,39 @@ Write-Host 'Native app self-test: PASS' -ForegroundColor Green
     if ($b.Contains($oldInstalled)) { $b = $b.Replace($oldInstalled,$newInstalled) }
     Write-Utf8NoBom $build $b
 
+    # Current test label.
     $main = Join-Path $appDir 'MainWindow.xaml'
     if (Test-Path $main) {
         $t = [IO.File]::ReadAllText($main)
-        $t = [regex]::Replace($t,'v0\.3\.0-dev\d+','v0.3.0-dev5')
+        $t = [regex]::Replace($t,'v0\.3\.0-dev\d+','v0.3.0-dev6')
         Write-Utf8NoBom $main $t
     }
     $iss = Join-Path $Source 'installer\AdaptiveMedia.iss'
     if (Test-Path $iss) {
         $t = [IO.File]::ReadAllText($iss)
-        $t = [regex]::Replace($t,'0\.3\.0-dev\d+','0.3.0-dev5')
+        $t = [regex]::Replace($t,'0\.3\.0-dev\d+','0.3.0-dev6')
         Write-Utf8NoBom $iss $t
     }
 }
 
 try {
     Banner 'Adaptive Media - current development build'
+
     New-Item -ItemType Directory -Force $Work,$TempRoot | Out-Null
 
     Write-Host 'Downloading current verified DevKit...' -ForegroundColor Gray
     Invoke-WebRequest -UseBasicParsing -Uri "$RepoBase/manifest.json" -OutFile $ManifestPath
     $manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+
     Invoke-WebRequest -UseBasicParsing -Uri "$RepoBase/AdaptiveMedia-DevKit.b64" -OutFile $B64
     $encoded = (Get-Content $B64 -Raw).Trim()
     [IO.File]::WriteAllBytes($Zip,[Convert]::FromBase64String($encoded))
 
     $actual = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLowerInvariant()
     $expected = ([string]$manifest.sha256).ToLowerInvariant()
-    if ($actual -ne $expected) { throw "DevKit integrity check failed. Expected $expected, got $actual." }
+    if ($actual -ne $expected) {
+        throw "DevKit integrity check failed. Expected $expected, got $actual."
+    }
     Write-Host 'DevKit integrity check: PASS' -ForegroundColor Green
 
     Write-Host 'Staging fixed development workspace...' -ForegroundColor Gray
@@ -166,12 +197,15 @@ try {
     Write-Host 'Source migrations: PASS' -ForegroundColor Green
 
     Banner 'Building + smoke testing'
+
     $buildScript = Join-Path $Source 'scripts\Build-Dev.ps1'
     Remove-Item $Log -Force -ErrorAction SilentlyContinue
 
     try {
-        & $buildScript -InstallTools -Clean -SmokeTest *>&1 | Tee-Object -FilePath $Log
-    } catch {
+        & $buildScript -InstallTools -Clean -SmokeTest *>&1 |
+            Tee-Object -FilePath $Log
+    }
+    catch {
         $_ | Out-String | Tee-Object -FilePath $Log -Append | Write-Host
         throw
     }
