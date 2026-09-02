@@ -5,6 +5,9 @@ Scope:
 - Gentle/Smooth motion explicitly use Vulkan FIFO presentation for display-sync
 - 0.3.1 remains the frozen friend-test release
 
-Retry dev1:
-- surface integration exceptions without weakening the gate
-- add Vulkan FIFO as a separate engine argument instead of an invalid two-argument Add() call
+Dev1 state:
+- build/self-test/integration/install/uninstall gate is green
+- private candidate SHA-256 7644A477460ACBE76852BBAB5B4345AF4C73852BC2BF35D3CDA242C277173C97
+
+Next inspection:
+- locate the diagnostics process-output decoding path responsible for the mpv copyright mojibake before patching it
