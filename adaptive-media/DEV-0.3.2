@@ -4,13 +4,15 @@ Scope:
 - ESC must leave fullscreen without quitting playback
 - Gentle/Smooth motion use Vulkan FIFO only when the completed launch plan remains Vulkan
 - Compatibility and RTX VPP D3D11 plans must not receive the Vulkan FIFO option
+- RTX VSR/HDR D3D11 VPP must override both gpu-api and gpu-context together
 - diagnostics capture mpv UTF-8 output without PowerShell 5.1 console mojibake
+- diagnostics report the actual managed NVIDIA/Compatibility/RTX renderer policy
 - diagnostics label multi-adapter / NVIDIA+Intel topology as an informational hint only
 - 0.3.1 remains the frozen friend-test release
 
 Dev2 validation target:
 - renderer-aware final motion-plan decision
 - Compatibility + Smooth integration regression
-- RTX D3D11 override must precede the FIFO decision
+- paired RTX D3D11 API/context override before FIFO decision
 - full private build/self-test/integration/install/uninstall gate
 - no public tag or release
