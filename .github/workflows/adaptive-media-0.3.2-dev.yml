@@ -65,11 +65,14 @@ jobs:
           if ($confText -notmatch '(?ms)^\[compatibility\].*?gpu-api=d3d11.*?gpu-context=d3d11') { throw 'Compatibility profile is not explicitly D3D11.' }
           if ($confText -notmatch '(?ms)^\[nvidia\].*?gpu-api=vulkan.*?gpu-context=winvk') { throw 'NVIDIA profile is not explicitly Vulkan/winvk.' }
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 1) { throw 'FIFO must be added once at final renderer decision.' }
-          if ($engineText -notmatch [regex]::Escape("`$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) { throw 'D3D11 FIFO guard missing.' }
-          $vppIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
+          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-api=d3d11')"))).Count -ne 1) { throw 'RTX VPP gpu-api=d3d11 override missing or duplicated.' }
+          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX VPP gpu-context=d3d11 override missing or duplicated.' }
+          if ($engineText -notmatch [regex]::Escape("`$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-api=d3d11') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) { throw 'D3D11 FIFO guard missing.' }
+          $apiIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-api=d3d11')")
+          $contextIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
           $fifoDecisionIndex = $engineText.IndexOf('$finalUsesD3d11 =')
-          if ($vppIndex -lt 0 -or $fifoDecisionIndex -le $vppIndex) { throw 'Final renderer decision occurs before RTX D3D11 override.' }
-          Write-Host 'Renderer-aware motion policy: PASS'
+          if ($apiIndex -lt 0 -or $contextIndex -le $apiIndex -or $fifoDecisionIndex -le $contextIndex) { throw 'RTX D3D11 pairing/final FIFO ordering is invalid.' }
+          Write-Host 'Renderer-aware motion and RTX D3D11 pairing: PASS'
 
       - name: Build and isolated smoke-test 0.3.2-dev2
         shell: powershell
@@ -105,6 +108,8 @@ jobs:
           $inputText = [IO.File]::ReadAllText($input)
           $programText = [IO.File]::ReadAllText($program)
           if (([regex]::Matches($engineText, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -ne 1) { throw 'Renderer-aware FIFO implementation must have one final add site.' }
+          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-api=d3d11')"))).Count -ne 1) { throw 'RTX D3D11 API override missing.' }
+          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX D3D11 context override missing.' }
           if ($inputText -notmatch '(?m)^ESC\s+set\s+fullscreen\s+no\s*$') { throw 'Managed ESC fullscreen binding missing.' }
           if ($inputText -match '(?im)^\s*ESC\s+.*\bquit(?:-watch-later)?\b') { throw 'ESC quit binding remains.' }
           foreach ($needle in @(
