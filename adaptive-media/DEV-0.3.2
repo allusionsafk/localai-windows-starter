@@ -10,9 +10,9 @@ Scope:
 - diagnostics label multi-adapter / NVIDIA+Intel topology as an informational hint only
 - 0.3.1 remains the frozen friend-test release
 
-Dev2 validation target:
-- renderer-aware final motion-plan decision
-- Compatibility + Smooth integration regression
-- paired RTX D3D11 API/context override before FIFO decision
+Dev3 validation target:
+- all dev2 renderer-aware and Compatibility regressions remain green
+- integration-only synthetic 1080p SDR + NVIDIA capability travels through the real BackendBridge
+- RTX VSR + RTX Video HDR launch plan must include D3D11 API/context, d3d11vpp features, and no Vulkan FIFO
 - full private build/self-test/integration/install/uninstall gate
 - no public tag or release
