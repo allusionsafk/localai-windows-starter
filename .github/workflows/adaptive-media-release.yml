@@ -37,10 +37,10 @@ jobs:
           $mediaDir = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media'
           $zipPath = Join-Path $env:RUNNER_TEMP 'AdaptiveMedia-0.3.0-Source.zip'
           $src = Join-Path $mediaDir 'source'
-          $hashText = Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw
-          $match = [regex]::Match($hashText, '(?i)\b[0-9a-f]{64}\b')
-          if (-not $match.Success) { throw 'Stable source checksum file does not contain a SHA-256 value.' }
-          $expected = $match.Value.ToLowerInvariant()
+          $hashText = (Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw).Trim()
+          if ($hashText.Length -lt 64) { throw 'Stable source checksum file is too short.' }
+          $expected = $hashText.Substring(0,64).ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid stable source SHA-256 text: $expected" }
           $parts = @(Get-ChildItem -LiteralPath $mediaDir -Filter 'AdaptiveMedia-0.3.0-Source.part*.b64' -File | Sort-Object Name)
           if ($parts.Count -ne 5) { throw "Expected 5 stable source transport parts; found $($parts.Count)." }
           $encoded = ($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }) -join ''
