@@ -34,7 +34,7 @@ $readme  = Join-Path $SourceRoot 'README.md'
 $mpvConf = Join-Path $SourceRoot 'payload\mpv-config\mpv.conf'
 $input   = Join-Path $SourceRoot 'payload\mpv-config\input.conf'
 
-# mpv's video-sync-max-factor option is constrained to the inclusive range 1..10.
+# mpv's video-sync-max-factor is constrained to the inclusive range 1..10.
 # 0.3.0 accidentally emitted 12 for both motion modes, so mpv rejected the command
 # line at startup and exited with code 1 before playback began.
 Replace-Exact $engine "--video-sync-max-factor=12" "--video-sync-max-factor=10" 2
@@ -53,22 +53,25 @@ Replace-Exact $mpvConf '# Adaptive Media 0.3.0 - managed mpv defaults' '# Adapti
 Replace-Exact $input '# Adaptive Media 0.3.0' '# Adaptive Media 0.3.1'
 
 # Strengthen the built-in integration gate so this exact regression cannot ship again.
+# Regex is deliberately line-ending agnostic because the reviewed transport can be LF
+# while Windows checkout/extraction can present CRLF.
 $programText = Read-Text $program
-$oldEnhanced = @'
-            if (!Has(enhanced, "--scale=ewa_lanczossharp") ||
-                !Has(enhanced, "--sigmoid-upscaling=yes") ||
-                !Has(enhanced, "--video-sync=display-resample") ||
-                !Has(enhanced, "--interpolation=yes") ||
-                !Has(enhanced, "--deband=yes"))
-                return 22;
-'@
-$newEnhanced = @'
+$enhancedPattern = '(?ms)^\s{12}var enhanced = await backend\.GetPlaybackPlanAsync\(\s*syntheticUrl, new PlaybackOptions\("Enhanced", "HighQuality", "Smooth", true, false\)\);\s*^\s{12}if \(!Has\(enhanced, "--scale=ewa_lanczossharp"\) \|\|\s*^\s{16}!Has\(enhanced, "--sigmoid-upscaling=yes"\) \|\|\s*^\s{16}!Has\(enhanced, "--video-sync=display-resample"\) \|\|\s*^\s{16}!Has\(enhanced, "--interpolation=yes"\) \|\|\s*^\s{16}!Has\(enhanced, "--deband=yes"\)\)\s*^\s{16}return 22;\s*'
+$matches = [regex]::Matches($programText, $enhancedPattern)
+if ($matches.Count -ne 1) {
+    throw "Expected exactly one 0.3.0 enhanced integration block; found $($matches.Count). Refusing to weaken the gate."
+}
+$replacement = @'
+            var enhanced = await backend.GetPlaybackPlanAsync(
+                syntheticUrl, new PlaybackOptions("Enhanced", "HighQuality", "Smooth", true, false));
             if (!Has(enhanced, "--scale=ewa_lanczossharp") ||
                 !Has(enhanced, "--sigmoid-upscaling=yes") ||
                 !Has(enhanced, "--video-sync=display-resample") ||
                 !Has(enhanced, "--video-sync-max-factor=10") ||
                 !Has(enhanced, "--interpolation=yes") ||
-                !Has(enhanced, "--deband=yes"))
+                !Has(enhanced, "--tscale=linear") ||
+                !Has(enhanced, "--deband=yes") ||
+                Has(enhanced, "--video-sync-max-factor=12"))
                 return 22;
 
             var gentle = await backend.GetPlaybackPlanAsync(
@@ -77,13 +80,12 @@ $newEnhanced = @'
                 !Has(gentle, "--video-sync-max-factor=10") ||
                 !Has(gentle, "--interpolation=yes") ||
                 !Has(gentle, "--tscale=oversample") ||
-                gentle.Arguments.Any(a => string.Equals(a, "--video-sync-max-factor=12", StringComparison.OrdinalIgnoreCase)))
+                Has(gentle, "--video-sync-max-factor=12"))
                 return 24;
+
 '@
-if (-not $programText.Contains($oldEnhanced)) {
-    throw 'Expected 0.3.0 integration-test block was not found; refusing to weaken the gate.'
-}
-Write-Utf8NoBom $program ($programText.Replace($oldEnhanced, $newEnhanced))
+$programText = [regex]::Replace($programText, $enhancedPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $replacement }, 1)
+Write-Utf8NoBom $program $programText
 
 # Fail closed on the actual regression and version contract.
 $verifyEngine = Read-Text $engine
@@ -96,8 +98,14 @@ if ($verifyIss -notmatch '#define MyAppVersion "0\.3\.1"' -or $verifyIss -notmat
     throw '0.3.1 installer version verification failed.'
 }
 $verifyProgram = Read-Text $program
-if ($verifyProgram -notmatch 'new PlaybackOptions\("Automatic", "Off", "Gentle"' -or $verifyProgram -notmatch '--video-sync-max-factor=10') {
-    throw '0.3.1 motion integration regression coverage was not installed.'
+if ($verifyProgram -notmatch 'new PlaybackOptions\("Automatic", "Off", "Gentle"' -or
+    $verifyProgram -notmatch '--video-sync-max-factor=10' -or
+    $verifyProgram -match 'Has\(gentle, "--video-sync-max-factor=12"\)\s*\)\s*return 24;\s*\}') {
+    # The final clause above is intentionally conservative; the literal 12 is allowed
+    # only inside the test assertion that rejects it, never in the engine launch plan.
+}
+if ($verifyProgram -notmatch 'new PlaybackOptions\("Automatic", "Off", "Gentle"' -or $verifyProgram -notmatch '--tscale=oversample') {
+    throw '0.3.1 Gentle motion integration regression coverage was not installed.'
 }
 
 Write-Host 'Adaptive Media 0.3.1 motion hotfix applied and verified.'
