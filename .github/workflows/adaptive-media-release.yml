@@ -37,13 +37,18 @@ jobs:
           $mediaDir = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media'
           $zipPath = Join-Path $env:RUNNER_TEMP 'AdaptiveMedia-0.3.0-Source.zip'
           $src = Join-Path $mediaDir 'source'
-          $expected = (Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw).Trim().Split()[0].ToLowerInvariant()
+          $hashText = Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw
+          $match = [regex]::Match($hashText, '(?i)\b[0-9a-f]{64}\b')
+          if (-not $match.Success) { throw 'Stable source checksum file does not contain a SHA-256 value.' }
+          $expected = $match.Value.ToLowerInvariant()
           $parts = @(Get-ChildItem -LiteralPath $mediaDir -Filter 'AdaptiveMedia-0.3.0-Source.part*.b64' -File | Sort-Object Name)
           if ($parts.Count -ne 5) { throw "Expected 5 stable source transport parts; found $($parts.Count)." }
           $encoded = ($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }) -join ''
           [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
           $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "Stable source archive hash mismatch: $actual" }
+          Write-Host "Expected stable source SHA-256: $expected"
+          Write-Host "Actual stable source SHA-256:   $actual"
+          if ($actual -ne $expected) { throw "Stable source archive hash mismatch: expected=$expected actual=$actual" }
           Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $src | Out-Null
           Expand-Archive -LiteralPath $zipPath -DestinationPath $src -Force
