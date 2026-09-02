@@ -98,6 +98,13 @@ $gentleNeedle = '                !Has(gentle, "--video-sync-max-factor=10") ||'
 $gentleNew = $gentleNeedle + [Environment]::NewLine + '                !Has(gentle, "--vulkan-swap-mode=fifo") ||'
 Replace-Exact $program $gentleNeedle $gentleNew
 
+# The stable integration harness writes exceptions to stderr, but WinExe
+# smoke invocation can hide that stream. Persist the dev exception in TEMP so
+# Actions can surface the real cause without weakening the integration gate.
+$catchNeedle = '            Console.Error.WriteLine(ex);'
+$catchNew = $catchNeedle + [Environment]::NewLine + '            try { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AdaptiveMedia-0.3.2-integration-error.txt"), ex.ToString()); } catch { }'
+Replace-Exact $program $catchNeedle $catchNew
+
 # ---------------------------------------------------------------------------
 # Fail-closed verification.
 # ---------------------------------------------------------------------------
@@ -120,6 +127,9 @@ if ($verifyEngine -match '--video-sync-max-factor=12') {
 $verifyProgram = Read-Text $program
 if (([regex]::Matches($verifyProgram, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -lt 2) {
     throw '0.3.2 integration gate does not cover FIFO for both motion modes.'
+}
+if (-not $verifyProgram.Contains('AdaptiveMedia-0.3.2-integration-error.txt')) {
+    throw '0.3.2 dev integration exception capture is missing.'
 }
 
 Write-Host 'Adaptive Media 0.3.2-dev1 fullscreen and motion-presentation fixes applied and verified.'
