@@ -40,15 +40,19 @@ jobs:
           & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
 
-      - name: Print diagnostics and external-process source context
+      - name: Print focused source context
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
-          $patterns = @('MPV version:', 'mpv version', '--version', 'Diagnostics', 'Get-Mpv', 'StandardOutput', 'OutputEncoding', 'Invoke-', 'Start-Process')
+          $patterns = @(
+            'input.conf', '--input-conf', '--config-dir', '--no-config', 'ConfigDir',
+            'MPV version:', 'StandardOutputEncoding', 'Get-NativeUtf8FirstLine',
+            'Graphics topology hint:', '--vulkan-swap-mode=fifo', 'ESC set fullscreen no'
+          )
           foreach ($pattern in $patterns) {
             Write-Host "===== MATCH: $pattern ====="
-            $matches = @(Get-ChildItem -LiteralPath $root -File -Recurse -Include '*.ps1','*.cs' | Select-String -SimpleMatch $pattern -Context 8,12)
+            $matches = @(Get-ChildItem -LiteralPath $root -File -Recurse -Include '*.ps1','*.cs','*.conf' | Select-String -SimpleMatch $pattern -Context 8,12)
             if ($matches.Count -eq 0) { Write-Host '(none)' }
             foreach ($m in $matches) {
               Write-Host ("FILE {0}:{1}" -f $m.Path, $m.LineNumber)
