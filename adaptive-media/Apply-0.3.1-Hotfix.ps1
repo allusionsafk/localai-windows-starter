@@ -59,103 +59,78 @@ Replace-Exact $input '# Adaptive Media 0.3.0' '# Adaptive Media 0.3.1'
 # ---------------------------------------------------------------------------
 # Clean in-launcher explanations
 # ---------------------------------------------------------------------------
-# Keep the dropdown labels short and stable for backend semantics, but put a
-# compact, always-visible explanation immediately underneath each choice.
-$profileOld = @'
-                            <ComboBox x:Name="ProfileBox" Grid.Column="1" SelectedIndex="0">
-                                <ComboBoxItem Content="Automatic"/>
-                                <ComboBoxItem Content="Reference"/>
-                                <ComboBoxItem Content="Enhanced"/>
-                                <ComboBoxItem Content="Compatibility"/>
-                            </ComboBox>
-'@
-$profileNew = @'
-                            <StackPanel Grid.Column="1">
-                                <ComboBox x:Name="ProfileBox" SelectedIndex="0">
-                                    <ComboBoxItem Content="Automatic" ToolTip="Sensible defaults for the current PC and source."/>
-                                    <ComboBoxItem Content="Reference" ToolTip="Preserve source cadence and colour intent; avoid optional processing."/>
-                                    <ComboBoxItem Content="Enhanced" ToolTip="Use the selected opt-in processing features for this launch."/>
-                                    <ComboBoxItem Content="Compatibility" ToolTip="Use the fallback playback path for troublesome files or drivers."/>
-                                </ComboBox>
-                                <TextBlock Text="Automatic — sensible defaults  •  Reference — source-faithful  •  Enhanced — tuned processing  •  Compatibility — fallback path"
-                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
-                            </StackPanel>
-'@
-Replace-Exact $xaml $profileOld $profileNew
+# Tooltips provide the longer explanation while compact, always-visible guide
+# lines underneath each row explain every choice without bloating the dropdowns.
+Replace-Exact $xaml '<ComboBoxItem Content="Automatic"/>' '<ComboBoxItem Content="Automatic" ToolTip="Sensible defaults for the current PC and source."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Reference"/>' '<ComboBoxItem Content="Reference" ToolTip="Preserve source cadence and colour intent; avoid optional processing."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Enhanced"/>' '<ComboBoxItem Content="Enhanced" ToolTip="Use the selected opt-in processing features for this launch."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Compatibility"/>' '<ComboBoxItem Content="Compatibility" ToolTip="Use the fallback playback path for troublesome files or drivers."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Off" Tag="Off"/>' '<ComboBoxItem Content="Off" Tag="Off" ToolTip="No extra upscaling processing."/>' 1
+Replace-Exact $xaml '<ComboBoxItem Content="High quality" Tag="HighQuality"/>' '<ComboBoxItem Content="High quality" Tag="HighQuality" ToolTip="EWA Lanczos Sharp scaling for lower-resolution video."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr"/>' '<ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr" ToolTip="Optional NVIDIA driver-assisted video upscaling."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Native cadence" Tag="Off"/>' '<ComboBoxItem Content="Native cadence" Tag="Off" ToolTip="Keep the source frame cadence. No interpolation."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Gentle smooth motion" Tag="Gentle"/>' '<ComboBoxItem Content="Gentle smooth motion" Tag="Gentle" ToolTip="Light interpolation to reduce judder while keeping a more natural look."/>'
+Replace-Exact $xaml '<ComboBoxItem Content="Smooth motion" Tag="Smooth"/>' '<ComboBoxItem Content="Smooth motion" Tag="Smooth" ToolTip="Stronger interpolation for maximum smoothness; may create a soap-opera look."/>'
+Replace-Exact $xaml '<CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0"/>' '<CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0" ToolTip="Reduce visible banding and compression artefacts in rough encodes."/>'
+Replace-Exact $xaml '<CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR"/>' '<CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR" ToolTip="Experimental NVIDIA HDR enhancement. Never enabled automatically."/>'
 
-$upscaleOld = @'
-                            <ComboBox x:Name="UpscaleBox" Grid.Column="4" SelectedIndex="0">
-                                <ComboBoxItem Content="Off" Tag="Off"/>
-                                <ComboBoxItem Content="High quality" Tag="HighQuality"/>
-                                <ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr"/>
-                            </ComboBox>
-'@
-$upscaleNew = @'
-                            <StackPanel Grid.Column="4">
-                                <ComboBox x:Name="UpscaleBox" SelectedIndex="0">
-                                    <ComboBoxItem Content="Off" Tag="Off" ToolTip="No extra upscaling processing."/>
-                                    <ComboBoxItem Content="High quality" Tag="HighQuality" ToolTip="EWA Lanczos Sharp scaling for lower-resolution video."/>
-                                    <ComboBoxItem Content="RTX Super Resolution (experimental)" Tag="RtxVsr" ToolTip="Optional NVIDIA driver-assisted video upscaling."/>
-                                </ComboBox>
-                                <TextBlock Text="Off — native scaling  •  High quality — EWA Lanczos Sharp  •  RTX SR — experimental NVIDIA upscaling"
-                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
-                            </StackPanel>
-'@
-Replace-Exact $xaml $upscaleOld $upscaleNew
+# Insert a compact guide below the Preset/Upscaling row.
+$secondRowMarker = '                        <Grid Margin="0,14,0,0">'
+$firstGuide = @'
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="145"/>
+                                <ColumnDefinition Width="260"/>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="145"/>
+                                <ColumnDefinition Width="260"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="1" Text="Automatic — sensible defaults • Reference — source-faithful • Enhanced — tuned processing • Compatibility — fallback path"
+                                       TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                            <TextBlock Grid.Column="4" Text="Off — native scaling • High quality — EWA Lanczos Sharp • RTX SR — experimental NVIDIA upscaling"
+                                       TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                        </Grid>
 
-$motionOld = @'
-                            <ComboBox x:Name="MotionBox" Grid.Column="1" SelectedIndex="0">
-                                <ComboBoxItem Content="Native cadence" Tag="Off"/>
-                                <ComboBoxItem Content="Gentle smooth motion" Tag="Gentle"/>
-                                <ComboBoxItem Content="Smooth motion" Tag="Smooth"/>
-                            </ComboBox>
+                        <Grid Margin="0,14,0,0">
 '@
-$motionNew = @'
-                            <StackPanel Grid.Column="1">
-                                <ComboBox x:Name="MotionBox" SelectedIndex="0">
-                                    <ComboBoxItem Content="Native cadence" Tag="Off" ToolTip="Keep the source frame cadence. No interpolation."/>
-                                    <ComboBoxItem Content="Gentle smooth motion" Tag="Gentle" ToolTip="Light interpolation to reduce judder while keeping a more natural look."/>
-                                    <ComboBoxItem Content="Smooth motion" Tag="Smooth" ToolTip="Stronger interpolation for maximum smoothness; may create a soap-opera look."/>
-                                </ComboBox>
-                                <TextBlock Text="Native — no interpolation  •  Gentle — lighter smoothing  •  Smooth — strongest smoothing"
-                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="2,5,0,0"/>
-                            </StackPanel>
-'@
-Replace-Exact $xaml $motionOld $motionNew
+Replace-Exact $xaml $secondRowMarker $firstGuide
 
-$checksOld = @'
-                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                                <CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0"/>
-                                <CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR"/>
-                            </StackPanel>
-'@
-$checksNew = @'
-                            <StackPanel Grid.Column="3" VerticalAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0" ToolTip="Reduce visible banding and compression artefacts in rough encodes."/>
-                                    <CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR" ToolTip="Experimental NVIDIA HDR enhancement. Never enabled automatically."/>
-                                </StackPanel>
-                                <TextBlock Text="Cleanup — reduces banding/compression artefacts  •  RTX HDR — experimental NVIDIA HDR enhancement"
-                                           TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
-                            </StackPanel>
-'@
-Replace-Exact $xaml $checksOld $checksNew
-
+# Replace the old generic paragraph with specific Motion/Cleanup/RTX guidance.
 $oldHint = '                        <TextBlock Text="Reference keeps source motion and colour intent. Smooth Motion deliberately interpolates frames and may create a soap-opera look. RTX options are never enabled automatically." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>'
-$newHint = '                        <TextBlock Text="Reference mode never enables interpolation, cleanup, RTX Video HDR, or RTX Super Resolution behind your back." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>'
+$newHint = @'
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="145"/>
+                                <ColumnDefinition Width="260"/>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="1" Text="Native — no interpolation • Gentle — lighter smoothing • Smooth — strongest smoothing"
+                                       TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                            <TextBlock Grid.Column="3" Text="Cleanup — reduces banding/compression artefacts • RTX HDR — experimental NVIDIA HDR enhancement"
+                                       TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                        </Grid>
+                        <TextBlock Text="Reference mode never enables interpolation, cleanup, RTX Video HDR, or RTX Super Resolution behind your back."
+                                   TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0"/>
+'@
 Replace-Exact $xaml $oldHint $newHint
 
 # ---------------------------------------------------------------------------
 # Built-in integration regression coverage
 # ---------------------------------------------------------------------------
-# Use small exact replacements rather than one multiline block so this remains
-# insensitive to CRLF/LF differences in the reconstructed source.
-Replace-Exact $program '                !Has(enhanced, "--video-sync=display-resample") ||' "                !Has(enhanced, \"--video-sync=display-resample\") ||`r`n                !Has(enhanced, \"--video-sync-max-factor=10\") ||"
-Replace-Exact $program '                !Has(enhanced, "--interpolation=yes") ||' "                !Has(enhanced, \"--interpolation=yes\") ||`r`n                !Has(enhanced, \"--tscale=linear\") ||"
+# Small exact replacements avoid CRLF/LF-sensitive multiline matching.
+$displayLine = '                !Has(enhanced, "--video-sync=display-resample") ||'
+$displayReplacement = $displayLine + [Environment]::NewLine + '                !Has(enhanced, "--video-sync-max-factor=10") ||'
+Replace-Exact $program $displayLine $displayReplacement
+
+$interpLine = '                !Has(enhanced, "--interpolation=yes") ||'
+$interpReplacement = $interpLine + [Environment]::NewLine + '                !Has(enhanced, "--tscale=linear") ||'
+Replace-Exact $program $interpLine $interpReplacement
+
 Replace-Exact $program '                !Has(enhanced, "--deband=yes"))' '                !Has(enhanced, "--deband=yes") || Has(enhanced, "--video-sync-max-factor=12"))'
 
 $compatMarker = '            var compatibility = await backend.GetPlaybackPlanAsync('
-$gentleBlock = @'
+$gentlePrefix = @'
             var gentle = await backend.GetPlaybackPlanAsync(
                 syntheticUrl, new PlaybackOptions("Automatic", "Off", "Gentle", false, false));
             if (!Has(gentle, "--video-sync=display-resample") ||
@@ -165,9 +140,8 @@ $gentleBlock = @'
                 Has(gentle, "--video-sync-max-factor=12"))
                 return 24;
 
-            var compatibility = await backend.GetPlaybackPlanAsync(
 '@
-Replace-Exact $program $compatMarker $gentleBlock
+Replace-Exact $program $compatMarker ($gentlePrefix + $compatMarker)
 
 # ---------------------------------------------------------------------------
 # Fail closed verification
@@ -194,6 +168,7 @@ foreach ($needle in @(
     'High quality — EWA Lanczos Sharp',
     'Gentle — lighter smoothing',
     'Cleanup — reduces banding/compression artefacts',
+    'Reference mode never enables interpolation',
     'Text="v0.3.1"'
 )) {
     if (-not $verifyXaml.Contains($needle)) { throw "0.3.1 launcher explanation is missing: $needle" }
