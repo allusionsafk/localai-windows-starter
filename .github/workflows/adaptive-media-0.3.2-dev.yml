@@ -8,6 +8,7 @@ on:
       - adaptive-media/DEV-0.3.2
       - adaptive-media/Test-0.3.2-Hardware.ps1
       - adaptive-media/Test-0.3.2-Hardware.cmd
+      - adaptive-media/Apply-0.3.2-Dev4.ps1
 
 permissions:
   contents: read
@@ -39,7 +40,7 @@ jobs:
           choco install innosetup --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
 
-      - name: Reconstruct reviewed source and apply 0.3.2 dev patch stack
+      - name: Reconstruct reviewed source and apply 0.3.2 dev4 patch stack
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -63,9 +64,10 @@ jobs:
           & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev3.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.2-Dev4.ps1') -SourceRoot $src -CertificationRoot $mediaDir
           Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
 
-      - name: Verify renderer and deterministic integration assumptions
+      - name: Verify renderer, deterministic integration, and bundled certification assumptions
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -74,6 +76,9 @@ jobs:
           $engineText = [IO.File]::ReadAllText((Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'))
           $backendText = [IO.File]::ReadAllText((Join-Path $root 'src\AdaptiveMedia.App\BackendBridge.cs'))
           $programText = [IO.File]::ReadAllText((Join-Path $root 'src\AdaptiveMedia.App\Program.cs'))
+          $issText = [IO.File]::ReadAllText((Join-Path $root 'installer\AdaptiveMedia.iss'))
+          $certPs1 = Join-Path $root 'payload\certification\Test-0.3.2-Hardware.ps1'
+          $certCmd = Join-Path $root 'payload\certification\Test-0.3.2-Hardware.cmd'
           if ($confText -notmatch '(?ms)^\[compatibility\].*?gpu-api=d3d11.*?gpu-context=d3d11') { throw 'Compatibility profile is not explicitly D3D11.' }
           if ($confText -notmatch '(?ms)^\[nvidia\].*?gpu-api=vulkan.*?gpu-context=winvk') { throw 'NVIDIA profile is not explicitly Vulkan/winvk.' }
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 1) { throw 'FIFO must be added once at final renderer decision.' }
@@ -87,13 +92,17 @@ jobs:
           foreach ($needle in @('syntheticSdr1080Probe','new PlaybackOptions("Enhanced", "RtxVsr", "Smooth", false, true)','nvidia-true-hdr=yes','scaling-mode=nvidia')) {
             if (-not $programText.Contains($needle)) { throw "Deterministic RTX integration assertion missing: $needle" }
           }
+          if (-not (Test-Path -LiteralPath $certPs1 -PathType Leaf) -or -not (Test-Path -LiteralPath $certCmd -PathType Leaf)) { throw 'Bundled hardware certification files are missing from payload.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $certPs1).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\Test-0.3.2-Hardware.ps1')).Hash) { throw 'Bundled certification PS1 differs from reviewed repository copy.' }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $certCmd).Hash -ne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\Test-0.3.2-Hardware.cmd')).Hash) { throw 'Bundled certification CMD differs from reviewed repository copy.' }
+          if (-not $issText.Contains('Run objective 0.3.2 hardware certification')) { throw 'Dev4 installer does not expose the post-install certification run.' }
           $apiIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-api=d3d11')")
           $contextIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
           $fifoDecisionIndex = $engineText.IndexOf('$finalUsesD3d11 =')
           if ($apiIndex -lt 0 -or $contextIndex -le $apiIndex -or $fifoDecisionIndex -le $contextIndex) { throw 'RTX D3D11 pairing/final FIFO ordering is invalid.' }
-          Write-Host 'Renderer-aware motion + deterministic RTX integration assumptions: PASS'
+          Write-Host 'Renderer-aware motion + deterministic RTX integration + bundled certification assumptions: PASS'
 
-      - name: Build and isolated smoke-test 0.3.2-dev3
+      - name: Build and isolated smoke-test 0.3.2-dev4
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -111,18 +120,21 @@ jobs:
             throw
           }
 
-      - name: Verify 0.3.2-dev3 candidate
+      - name: Verify 0.3.2-dev4 candidate
         id: artifact
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
           $dist = Join-Path $root 'dist'
-          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev3-x64.exe'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev4-x64.exe'
           $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
           $input = Join-Path $root 'payload\mpv-config\input.conf'
           $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
-          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev3 installer was not produced.' }
+          $stageCertPs1 = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.ps1'
+          $stageCertCmd = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.cmd'
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev4 installer was not produced.' }
+          if (-not (Test-Path -LiteralPath $stageCertPs1 -PathType Leaf) -or -not (Test-Path -LiteralPath $stageCertCmd -PathType Leaf)) { throw 'Staged hardware certification files are missing.' }
           $engineText = [IO.File]::ReadAllText($engine)
           $inputText = [IO.File]::ReadAllText($input)
           $programText = [IO.File]::ReadAllText($program)
@@ -140,16 +152,16 @@ jobs:
             'nvidia-true-hdr=yes'
           )) { if (-not $programText.Contains($needle)) { throw "Integration coverage missing: $needle" } }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
-          "$hash  AdaptiveMediaSetup-0.3.2-dev3-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev3-x64.sha256.txt') -Encoding ascii
+          "$hash  AdaptiveMediaSetup-0.3.2-dev4-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev4-x64.sha256.txt') -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_OUTPUT
-          Write-Host "0.3.2-dev3 candidate SHA-256: $hash"
+          Write-Host "0.3.2-dev4 candidate SHA-256: $hash"
 
       - name: Upload private dev artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AdaptiveMedia-0.3.2-dev3-x64
+          name: AdaptiveMedia-0.3.2-dev4-x64
           path: |
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev3-x64.exe
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev3-x64.sha256.txt
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev4-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev4-x64.sha256.txt
           if-no-files-found: error
           retention-days: 14
