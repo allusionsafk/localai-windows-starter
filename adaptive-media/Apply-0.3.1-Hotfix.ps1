@@ -59,8 +59,10 @@ Replace-Exact $input '# Adaptive Media 0.3.0' '# Adaptive Media 0.3.1'
 # ---------------------------------------------------------------------------
 # Clean in-launcher explanations
 # ---------------------------------------------------------------------------
-# Tooltips provide the longer explanation while compact, always-visible guide
-# lines underneath each row explain every choice without bloating the dropdowns.
+# IMPORTANT: keep user-visible literals in this PowerShell 5.1 patch ASCII-only.
+# Windows PowerShell 5.1 can misread UTF-8-without-BOM script literals, which caused
+# em dashes / bullets to render as mojibake in the 0.3.1 launcher. Hyphens and pipes
+# are intentionally used here so the generated XAML is deterministic on Windows.
 Replace-Exact $xaml '<ComboBoxItem Content="Automatic"/>' '<ComboBoxItem Content="Automatic" ToolTip="Sensible defaults for the current PC and source."/>'
 Replace-Exact $xaml '<ComboBoxItem Content="Reference"/>' '<ComboBoxItem Content="Reference" ToolTip="Preserve source cadence and colour intent; avoid optional processing."/>'
 Replace-Exact $xaml '<ComboBoxItem Content="Enhanced"/>' '<ComboBoxItem Content="Enhanced" ToolTip="Use the selected opt-in processing features for this launch."/>'
@@ -85,9 +87,9 @@ $firstGuide = @'
                                 <ColumnDefinition Width="145"/>
                                 <ColumnDefinition Width="260"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="1" Text="Automatic — sensible defaults • Reference — source-faithful • Enhanced — tuned processing • Compatibility — fallback path"
+                            <TextBlock Grid.Column="1" Text="Automatic - sensible defaults | Reference - source-faithful | Enhanced - tuned processing | Compatibility - fallback path"
                                        TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
-                            <TextBlock Grid.Column="4" Text="Off — native scaling • High quality — EWA Lanczos Sharp • RTX SR — experimental NVIDIA upscaling"
+                            <TextBlock Grid.Column="4" Text="Off - native scaling | High quality - EWA Lanczos Sharp | RTX SR - experimental NVIDIA upscaling"
                                        TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
                         </Grid>
 
@@ -105,9 +107,9 @@ $newHint = @'
                                 <ColumnDefinition Width="28"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="1" Text="Native — no interpolation • Gentle — lighter smoothing • Smooth — strongest smoothing"
+                            <TextBlock Grid.Column="1" Text="Native - no interpolation | Gentle - lighter smoothing | Smooth - strongest smoothing"
                                        TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
-                            <TextBlock Grid.Column="3" Text="Cleanup — reduces banding/compression artefacts • RTX HDR — experimental NVIDIA HDR enhancement"
+                            <TextBlock Grid.Column="3" Text="Cleanup - reduces banding/compression artefacts | RTX HDR - experimental NVIDIA HDR enhancement"
                                        TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
                         </Grid>
                         <TextBlock Text="Reference mode never enables interpolation, cleanup, RTX Video HDR, or RTX Super Resolution behind your back."
@@ -118,7 +120,6 @@ Replace-Exact $xaml $oldHint $newHint
 # ---------------------------------------------------------------------------
 # Built-in integration regression coverage
 # ---------------------------------------------------------------------------
-# Small exact replacements avoid CRLF/LF-sensitive multiline matching.
 $displayLine = '                !Has(enhanced, "--video-sync=display-resample") ||'
 $displayReplacement = $displayLine + [Environment]::NewLine + '                !Has(enhanced, "--video-sync-max-factor=10") ||'
 Replace-Exact $program $displayLine $displayReplacement
@@ -164,14 +165,17 @@ foreach ($needle in @(
 
 $verifyXaml = Read-Text $xaml
 foreach ($needle in @(
-    'Automatic — sensible defaults',
-    'High quality — EWA Lanczos Sharp',
-    'Gentle — lighter smoothing',
-    'Cleanup — reduces banding/compression artefacts',
+    'Automatic - sensible defaults',
+    'High quality - EWA Lanczos Sharp',
+    'Gentle - lighter smoothing',
+    'Cleanup - reduces banding/compression artefacts',
     'Reference mode never enables interpolation',
     'Text="v0.3.1"'
 )) {
     if (-not $verifyXaml.Contains($needle)) { throw "0.3.1 launcher explanation is missing: $needle" }
+}
+if ($verifyXaml -match 'â|—|•') {
+    throw 'Non-ASCII launcher punctuation or mojibake remains in generated XAML.'
 }
 
 $verifyIss = Read-Text $iss
@@ -179,4 +183,4 @@ if ($verifyIss -notmatch '#define MyAppVersion "0\.3\.1"' -or $verifyIss -notmat
     throw '0.3.1 installer version verification failed.'
 }
 
-Write-Host 'Adaptive Media 0.3.1 motion hotfix, launcher explanations, and regression coverage applied and verified.'
+Write-Host 'Adaptive Media 0.3.1 motion hotfix, ASCII-safe launcher explanations, and regression coverage applied and verified.'
