@@ -57,12 +57,25 @@ Write-Utf8NoBom $input $inputText
 # presentation mode; for Vulkan that is fifo (or fifo-relaxed). 0.3.1 relied
 # on auto selection, which behaved badly on the tested Optimus presentation
 # path while dGPU-only mode behaved normally.
+#
+# The engine stores each native argument as one collection element. Keep FIFO
+# as its own Add() call; passing two strings to Add() is invalid PowerShell/.NET.
 $engineText = Read-Text $engine
-$displaySyncCount = ([regex]::Matches($engineText, [regex]::Escape("'--video-sync=display-resample'"))).Count
-if ($displaySyncCount -ne 2) {
-    throw "Expected exactly two display-resample motion lanes after 0.3.1; found $displaySyncCount."
+$displayAddPattern = '(?m)^(\s*)(\$[A-Za-z_][A-Za-z0-9_]*)\.Add\(''--video-sync=display-resample''\)\s*$'
+$displayAddMatches = [regex]::Matches($engineText, $displayAddPattern)
+if ($displayAddMatches.Count -ne 2) {
+    throw "Expected exactly two display-resample Add() motion lanes after 0.3.1; found $($displayAddMatches.Count)."
 }
-$engineText = $engineText.Replace("'--video-sync=display-resample'", "'--video-sync=display-resample','--vulkan-swap-mode=fifo'")
+$engineText = [regex]::Replace(
+    $engineText,
+    $displayAddPattern,
+    { param($m)
+        $indent = $m.Groups[1].Value
+        $list = $m.Groups[2].Value
+        return $indent + $list + ".Add('--video-sync=display-resample')" + [Environment]::NewLine +
+               $indent + $list + ".Add('--vulkan-swap-mode=fifo')"
+    }
+)
 Write-Utf8NoBom $engine $engineText
 
 # ---------------------------------------------------------------------------
@@ -117,11 +130,14 @@ if ($verifyInput -match '(?im)^\s*ESC\s+.*\bquit(?:-watch-later)?\b') {
 }
 
 $verifyEngine = Read-Text $engine
-if (([regex]::Matches($verifyEngine, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -ne 2) {
-    throw 'Expected both Gentle and Smooth motion lanes to force Vulkan FIFO presentation.'
+if (([regex]::Matches($verifyEngine, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 2) {
+    throw 'Expected both Gentle and Smooth motion lanes to add Vulkan FIFO as a separate argument.'
 }
 if ($verifyEngine -match '--video-sync-max-factor=12') {
     throw 'Invalid 0.3.0 motion max-factor 12 reappeared.'
+}
+if ($verifyEngine -match "\.Add\('--video-sync=display-resample'\s*,") {
+    throw 'Invalid multi-argument Add() form remains in the 0.3.2 engine.'
 }
 
 $verifyProgram = Read-Text $program
