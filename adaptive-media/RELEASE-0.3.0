@@ -1,1 +1,2 @@
 trigger stable 0.3.0 Windows build, isolated smoke validation, and GitHub release
+retry: checksum parser fixed after first runner attempt
