@@ -120,31 +120,31 @@ if ($Clean) { Remove-Item -Recurse -Force $Build,$Dist -ErrorAction SilentlyCont
 if ($Clean) { Remove-Item -Recurse -Force $Build,$Dist,(Join-Path $Root 'src\AdaptiveMedia.App\bin'),(Join-Path $Root 'src\AdaptiveMedia.App\obj') -ErrorAction SilentlyContinue }
 '@
     if ($b.Contains($oldClean)) { $b = $b.Replace($oldClean,$newClean) }
-
-    $oldStage = @'
+    $b = $b.Replace(
+@" 
 Step 'Launcher self-test'
-& (Join-Path $Stage 'AdaptiveMedia.exe') --self-test
-if ($LASTEXITCODE -ne 0) { throw "Native app self-test failed with exit code $LASTEXITCODE." }
+& (Join-Path `$Stage 'AdaptiveMedia.exe') --self-test
+if (`$LASTEXITCODE -ne 0) { throw "Native app self-test failed with exit code `$LASTEXITCODE." }
 Write-Host 'Native app self-test: PASS' -ForegroundColor Green
-'@
-    $newStage = @'
+"@,
+@"
 Step 'Launcher self-test'
-$stageLauncher = Join-Path $Stage 'AdaptiveMedia.exe'
-$selfTest = Start-Process -FilePath $stageLauncher -ArgumentList '--self-test' -Wait -PassThru
-if ($selfTest.ExitCode -ne 0) { throw "Native app self-test failed with exit code $($selfTest.ExitCode)." }
+`$stageLauncher = Join-Path `$Stage 'AdaptiveMedia.exe'
+`$selfTest = Start-Process -FilePath `$stageLauncher -ArgumentList '--self-test' -Wait -PassThru
+if (`$selfTest.ExitCode -ne 0) { throw "Native app self-test failed with exit code `$(`$selfTest.ExitCode)." }
 Write-Host 'Native app self-test: PASS' -ForegroundColor Green
-'@
-    if ($b.Contains($oldStage)) { $b = $b.Replace($oldStage,$newStage) }
-
-    $oldInstalled = @'
-    & $smokeLauncher --self-test
-    if ($LASTEXITCODE -ne 0) { throw "Installed app self-test failed with exit code $LASTEXITCODE." }
-'@
-    $newInstalled = @'
-    $installedSelfTest = Start-Process -FilePath $smokeLauncher -ArgumentList '--self-test' -Wait -PassThru
-    if ($installedSelfTest.ExitCode -ne 0) { throw "Installed app self-test failed with exit code $($installedSelfTest.ExitCode)." }
-'@
-    if ($b.Contains($oldInstalled)) { $b = $b.Replace($oldInstalled,$newInstalled) }
+"@
+    )
+    $b = $b.Replace(
+@"
+    & `$smokeLauncher --self-test
+    if (`$LASTEXITCODE -ne 0) { throw "Installed app self-test failed with exit code `$LASTEXITCODE." }
+"@,
+@"
+    `$installedSelfTest = Start-Process -FilePath `$smokeLauncher -ArgumentList '--self-test' -Wait -PassThru
+    if (`$installedSelfTest.ExitCode -ne 0) { throw "Installed app self-test failed with exit code `$(`$installedSelfTest.ExitCode)." }
+"@
+    )
     Write-Utf8NoBom $build $b
 
     # Current test label.
@@ -168,12 +168,72 @@ try {
     New-Item -ItemType Directory -Force $Work,$TempRoot | Out-Null
 
     Write-Host 'Downloading current verified DevKit...' -ForegroundColor Gray
-    Invoke-WebRequest -UseBasicParsing -Uri "$RepoBase/manifest.json" -OutFile $ManifestPath
+    Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri "$RepoBase/manifest.json?cb=$([DateTime]::UtcNow.Ticks)" -OutFile $ManifestPath
     $manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
 
-    Invoke-WebRequest -UseBasicParsing -Uri "$RepoBase/AdaptiveMedia-DevKit.b64" -OutFile $B64
-    $encoded = (Get-Content $B64 -Raw).Trim()
-    [IO.File]::WriteAllBytes($Zip,[Convert]::FromBase64String($encoded))
+    # Fetch the DevKit payload through GitHub's Contents API first. The API
+    # returns the repository file itself as Base64, so this is intentionally a
+    # two-step decode:
+    #   API content (Base64) -> AdaptiveMedia-DevKit.b64 text -> DevKit ZIP.
+    # This avoids treating an HTML/proxy/rate-limit response from a raw-content
+    # CDN as if it were the DevKit. A validated raw-content fallback remains for
+    # temporary GitHub API rate-limit failures.
+    $innerBase64 = $null
+    $apiUri = 'https://api.github.com/repos/allusionsafk/localai-windows-starter/contents/AdaptiveMedia-DevKit.b64?ref=adaptive-media-dev'
+    try {
+        $api = Invoke-RestMethod -UseBasicParsing -Headers @{
+            'Accept'='application/vnd.github+json'
+            'User-Agent'='AdaptiveMedia-Dev-Updater'
+            'Cache-Control'='no-cache'
+        } -Uri $apiUri
+
+        if ($api.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace([string]$api.content)) {
+            throw 'GitHub Contents API returned an unexpected payload encoding.'
+        }
+
+        $outer = ([string]$api.content) -replace '\s',''
+        if ($outer -notmatch '^[A-Za-z0-9+/]*={0,2}$' -or ($outer.Length % 4) -ne 0) {
+            throw 'GitHub Contents API returned malformed outer Base64.'
+        }
+
+        $innerBase64 = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($outer))
+        Write-Host 'DevKit transport: GitHub Contents API' -ForegroundColor Gray
+    }
+    catch {
+        Write-Host ('Contents API unavailable; trying validated raw fallback: ' + $_.Exception.Message) -ForegroundColor Yellow
+        $rawUri = "$RepoBase/AdaptiveMedia-DevKit.b64?cb=$([DateTime]::UtcNow.Ticks)"
+        $response = Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri $rawUri
+        $candidate = [string]$response.Content
+
+        # Raw Base64 may contain CR/LF but nothing else.
+        if ([string]::IsNullOrWhiteSpace($candidate) -or
+            $candidate -match '[^A-Za-z0-9+/=\r\n\t ]') {
+            $preview = ($candidate -replace '[\r\n]+',' ')
+            if ($preview.Length -gt 120) { $preview = $preview.Substring(0,120) }
+            throw "DevKit download was not Base64 data. Response preview: $preview"
+        }
+        $innerBase64 = $candidate
+        Write-Host 'DevKit transport: validated raw fallback' -ForegroundColor Gray
+    }
+
+    $encoded = ($innerBase64 -replace '\s','')
+    if ($encoded -notmatch '^[A-Za-z0-9+/]*={0,2}$' -or ($encoded.Length % 4) -ne 0) {
+        throw 'Downloaded DevKit payload failed Base64 validation before decode.'
+    }
+
+    try {
+        [IO.File]::WriteAllBytes($Zip,[Convert]::FromBase64String($encoded))
+    }
+    catch {
+        throw "Validated DevKit Base64 still failed to decode: $($_.Exception.Message)"
+    }
+
+    # ZIP local-file signatures start with PK. Catch transport corruption before
+    # relying on the checksum message to explain a non-ZIP payload.
+    $zipBytes = [IO.File]::ReadAllBytes($Zip)
+    if ($zipBytes.Length -lt 4 -or $zipBytes[0] -ne 0x50 -or $zipBytes[1] -ne 0x4B) {
+        throw 'Decoded DevKit payload is not a ZIP archive.'
+    }
 
     $actual = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLowerInvariant()
     $expected = ([string]$manifest.sha256).ToLowerInvariant()
