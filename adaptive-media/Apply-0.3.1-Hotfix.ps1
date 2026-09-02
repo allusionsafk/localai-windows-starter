@@ -61,8 +61,8 @@ Replace-Exact $input '# Adaptive Media 0.3.0' '# Adaptive Media 0.3.1'
 # ---------------------------------------------------------------------------
 # IMPORTANT: keep user-visible literals in this PowerShell 5.1 patch ASCII-only.
 # Windows PowerShell 5.1 can misread UTF-8-without-BOM script literals, which caused
-# em dashes / bullets to render as mojibake in the 0.3.1 launcher. Hyphens and pipes
-# are intentionally used here so the generated XAML is deterministic on Windows.
+# punctuation to render as mojibake in the launcher. Hyphens and pipes are used so
+# the generated XAML is deterministic on Windows.
 Replace-Exact $xaml '<ComboBoxItem Content="Automatic"/>' '<ComboBoxItem Content="Automatic" ToolTip="Sensible defaults for the current PC and source."/>'
 Replace-Exact $xaml '<ComboBoxItem Content="Reference"/>' '<ComboBoxItem Content="Reference" ToolTip="Preserve source cadence and colour intent; avoid optional processing."/>'
 Replace-Exact $xaml '<ComboBoxItem Content="Enhanced"/>' '<ComboBoxItem Content="Enhanced" ToolTip="Use the selected opt-in processing features for this launch."/>'
@@ -76,7 +76,6 @@ Replace-Exact $xaml '<ComboBoxItem Content="Smooth motion" Tag="Smooth"/>' '<Com
 Replace-Exact $xaml '<CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0"/>' '<CheckBox x:Name="CleanupCheck" Content="Compression cleanup / debanding" Margin="0,0,24,0" ToolTip="Reduce visible banding and compression artefacts in rough encodes."/>'
 Replace-Exact $xaml '<CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR"/>' '<CheckBox x:Name="RtxHdrCheck" Content="RTX Video HDR" ToolTip="Experimental NVIDIA HDR enhancement. Never enabled automatically."/>'
 
-# Insert a compact guide below the Preset/Upscaling row.
 $secondRowMarker = '                        <Grid Margin="0,14,0,0">'
 $firstGuide = @'
                         <Grid Margin="0,6,0,0">
@@ -97,7 +96,6 @@ $firstGuide = @'
 '@
 Replace-Exact $xaml $secondRowMarker $firstGuide
 
-# Replace the old generic paragraph with specific Motion/Cleanup/RTX guidance.
 $oldHint = '                        <TextBlock Text="Reference keeps source motion and colour intent. Smooth Motion deliberately interpolates frames and may create a soap-opera look. RTX options are never enabled automatically." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>'
 $newHint = @'
                         <Grid Margin="0,6,0,0">
@@ -174,8 +172,9 @@ foreach ($needle in @(
 )) {
     if (-not $verifyXaml.Contains($needle)) { throw "0.3.1 launcher explanation is missing: $needle" }
 }
-if ($verifyXaml -match 'â|—|•') {
-    throw 'Non-ASCII launcher punctuation or mojibake remains in generated XAML.'
+$badChars = @([char]0x00E2, [char]0x2014, [char]0x2022)
+foreach ($bad in $badChars) {
+    if ($verifyXaml.IndexOf($bad) -ge 0) { throw 'Non-ASCII launcher punctuation or mojibake remains in generated XAML.' }
 }
 
 $verifyIss = Read-Text $iss
