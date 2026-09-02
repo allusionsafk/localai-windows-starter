@@ -12,6 +12,22 @@ from localai import model_scout, scout_categories
 from localai.ops import CommandResult
 
 
+@pytest.fixture(autouse=True)
+def _keep_existing_behavior_tests_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These legacy tests exercise scout behavior, not remote enrichment."""
+
+    def fallback(candidate: model_scout.Candidate) -> model_scout.CandidateEvidence:
+        return model_scout.CandidateEvidence(
+            artefact=None,
+            weights=model_scout.resolve_weight_sizing(total_b=candidate.total),
+            architecture=None,
+            runtime_support="unverified",
+            runtime_provenance="offline-test-fixture",
+        )
+
+    monkeypatch.setattr(model_scout, "enrich_candidate", fallback)
+
+
 def test_model_scout_parse_and_fit_moe_candidate() -> None:
     candidate = model_scout.parse_model("unsloth/Qwen3.6-35B-A3B-GGUF")
     budget = model_scout.Budget(ram_gb=32, vram_gb=12, disk_free_gb=100)
@@ -141,10 +157,19 @@ def test_scout_prints_a_section_per_category_with_curated_top(
     # Voice has no candidates and surfaces the honest note.
     voice_at = lines.index("[Voice]")
     assert any("(none)" in line for line in lines[voice_at : voice_at + 2])
-    assert written["groups"]  # cache handed to the writer
+    ranking = written["groups"]
+    assert isinstance(ranking, model_scout.FinalRanking)
+    picks = [
+        candidate
+        for result in ranking.groups.values()
+        for candidate in (result.top, *result.runners_up)
+        if candidate is not None
+    ]
+    assert picks
+    assert all(candidate.fit_stage == "final" for candidate in picks)
 
 
-def test_scout_lists_dropped_models_for_vram(
+def test_scout_does_not_expose_provisional_only_dropped_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     huge = _built("Qwen/Qwen3.5-43B-GGUF", downloads=5000, age_days=5)
@@ -163,7 +188,7 @@ def test_scout_lists_dropped_models_for_vram(
         mode="Scout", now=datetime(2026, 7, 8, 12, 0), probe_timeout_sec=5
     )
 
-    assert any("dropped" in line.lower() and "43B" in line for line in lines)
+    assert not any("43B" in line for line in lines)
 
 
 def test_scout_command_alias_is_registered() -> None:
@@ -425,6 +450,20 @@ def test_collect_prepare_no_pull_streams_lines_live(
         lambda repo: model_scout.QuantArtefact("UD-Q4_K_XL", None),
     )
     monkeypatch.setattr(model_scout, "fetch_hf_config", lambda repo: None)
+    monkeypatch.setattr(
+        model_scout,
+        "enrich_candidate",
+        lambda candidate: model_scout.CandidateEvidence(
+            artefact=model_scout.QuantArtefact("UD-Q4_K_XL", None),
+            weights=model_scout.resolve_weight_sizing(
+                total_b=candidate.total,
+                quant="UD-Q4_K_XL",
+            ),
+            architecture=None,
+            runtime_support="unverified",
+            runtime_provenance="offline-test-fixture",
+        ),
+    )
 
     echoed: list[str] = []
     code, lines = model_scout.collect_model_scout_report(
@@ -1073,11 +1112,27 @@ def test_coder_appears_in_coding_not_chat() -> None:
     assert chat_top is None or chat_top.author == "curated"
 
 
-def test_groups_to_dict_is_json_serialisable() -> None:
-    groups = model_scout.collect_scout_groups(
+def test_groups_to_dict_is_json_serialisable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provisional = model_scout.collect_provisional_groups(
         _budget(), [_built("Qwen/Qwen3.5-9B-GGUF")], parallel=1, kv_factor=0.5
     )
-    payload = model_scout.groups_to_dict(groups)
+    monkeypatch.setattr(
+        model_scout,
+        "enrich_candidate",
+        lambda candidate: model_scout.CandidateEvidence(
+            artefact=model_scout.QuantArtefact("Q4_K_M", 5 * model_scout.GIB),
+            weights=model_scout.WeightSizing(5.0, "Q4_K_M", "measured-file"),
+            architecture=None,
+            runtime_support="unverified",
+            runtime_provenance="no-positive-runtime-evidence",
+        ),
+    )
+    final = model_scout.collect_final_groups(
+        _budget(), provisional, parallel=1, kv_factor=0.5
+    )
+    payload = model_scout.groups_to_dict(final)
     json.dumps(payload)  # must not raise
     assert set(payload) == {c.id for c in scout_categories.CATEGORIES}
     assert payload["voice"]["top"] is None
@@ -1090,12 +1145,18 @@ def test_write_scout_groups_writes_cache(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    provisional = model_scout.collect_provisional_groups(
+        _budget(), [], parallel=1, kv_factor=0.5
+    )
+    final = model_scout.collect_final_groups(
+        _budget(), provisional, parallel=1, kv_factor=0.5
+    )
+    model_scout.write_scout_groups(final, now=datetime(2026, 7, 8, 12, 0))
     cache = tmp_path / "logs" / "model-scout-groups.json"
     assert cache.exists()
     data = json.loads(cache.read_text(encoding="utf-8"))
     assert data["generated"].startswith("2026-07-08")
+    assert data["fitStage"] == "final"
     assert set(data["groups"]) == {c.id for c in scout_categories.CATEGORIES}
 
 
@@ -1105,9 +1166,21 @@ def test_read_scout_groups_roundtrips(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
+    monkeypatch.setattr(
+        model_scout,
+        "get_budget",
+        lambda timeout_sec, vram_override=None: _budget(),
+    )
+    monkeypatch.setenv("OLLAMA_NUM_PARALLEL", "1")
+    monkeypatch.setenv("OLLAMA_KV_CACHE_TYPE", "q8_0")
     assert model_scout.read_scout_groups() is None  # no cache yet
-    groups = model_scout.collect_scout_groups(_budget(), [], parallel=1, kv_factor=0.5)
-    model_scout.write_scout_groups(groups, now=datetime(2026, 7, 8, 12, 0))
+    provisional = model_scout.collect_provisional_groups(
+        _budget(), [], parallel=1, kv_factor=0.5
+    )
+    final = model_scout.collect_final_groups(
+        _budget(), provisional, parallel=1, kv_factor=0.5
+    )
+    model_scout.write_scout_groups(final, now=datetime(2026, 7, 8, 12, 0))
     data = model_scout.read_scout_groups()
     assert data is not None
     assert data["generated"].startswith("2026-07-08")
@@ -1199,14 +1272,14 @@ def test_a_smaller_quant_never_shrinks_below_the_heuristic() -> None:
     sizing = model_scout.resolve_weight_sizing(total_b=14.0, quant="Q3_K_M")
     assert sizing is not None
     assert sizing.gb == heuristic
-    assert sizing.provenance == "global-heuristic"
+    assert sizing.provenance == "bpw-table+heuristic-floor"
 
 
-def test_missing_size_and_unknown_quant_falls_back_to_the_estimator() -> None:
+def test_missing_size_and_unknown_quant_stays_unverified() -> None:
     sizing = model_scout.resolve_weight_sizing(total_b=9.0, quant="NOT_A_QUANT")
     assert sizing is not None
-    assert sizing.provenance == "global-heuristic"
-    assert sizing.gb == round(9.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+    assert sizing.provenance == "unverified-tensor-width"
+    assert sizing.gb is None
     # No parameter count and no measurement is genuinely unknown, not zero.
     assert model_scout.resolve_weight_sizing(total_b=None, quant="Q4_K_M") is None
 
