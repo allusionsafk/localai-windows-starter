@@ -1106,7 +1106,11 @@ def discover_candidates(
         key = candidate.id
         if key not in by_key or candidate.score > by_key[key].score:
             by_key[key] = candidate
-    return sorted(by_key.values(), key=lambda item: item.score, reverse=True)
+    # Ties are broken by repository id, never by arrival order. Several of the
+    # authors queried publish quants of the same model, so equal scores are
+    # ordinary rather than exceptional, and a stable sort would otherwise let
+    # HuggingFace's response order decide which repository wins.
+    return sorted(by_key.values(), key=lambda item: (-item.score, item.id))
 
 
 def fetch_hf_models(author: str) -> list[object]:
@@ -2019,7 +2023,10 @@ def _collect_scout_groups(
                     evidence=candidate_evidence,
                 )
             )
-        scored.sort(key=lambda item: item.score, reverse=True)
+        # Same reason as discover_candidates: a tie must not be settled by the
+        # order HuggingFace happened to return, or the recommended pick changes
+        # between runs on identical evidence.
+        scored.sort(key=lambda item: (-item.score, item.id))
         top = scored[0] if scored else None
         runners = tuple(scored[1:3])
         why = (

@@ -809,3 +809,66 @@ def test_markdown_log_rejects_provisional_ranking(
             pick=None,
             notes=[],
         )
+
+
+def test_tied_candidates_rank_by_repository_not_arrival_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A tie must not be settled by the order HuggingFace happened to return.
+
+    Several of the authors the scout queries publish quants of the same model,
+    so equal scores are ordinary. A stable sort keyed on score alone left the
+    winner decided by API arrival order, so the recommended pick could change
+    between runs on identical evidence.
+    """
+    _cache_path(monkeypatch, tmp_path)
+    repos = [
+        "unsloth/Tied-12B-GGUF",
+        "bartowski/Tied-12B-GGUF",
+        "lmstudio-community/Tied-12B-GGUF",
+        "Qwen/Tied-12B-GGUF",
+    ]
+    orderings = (repos, list(reversed(repos)), [repos[2], repos[0], repos[3], repos[1]])
+
+    tops: set[str] = set()
+    for ordering in orderings:
+        ranking = model_scout.collect_provisional_groups(
+            _BUDGET,
+            [_candidate(repo) for repo in ordering],
+            parallel=1,
+            kv_factor=0.5,
+        )
+        chat = ranking.groups["chat"]
+        assert chat.top is not None
+        tops.add(chat.top.id)
+        ordered = [chat.top.id, *(runner.id for runner in chat.runners_up)]
+        assert ordered == sorted(ordered)
+
+    assert len(tops) == 1
+
+
+def test_discovery_dedupe_orders_ties_by_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery itself must hand a deterministic order to shortlisting."""
+    stamp = "2026-06-01T00:00:00.000Z"
+    rows = [
+        {"id": "unsloth/Same-12B-GGUF", "lastModified": stamp, "downloads": 5000},
+        {"id": "bartowski/Same-12B-GGUF", "lastModified": stamp, "downloads": 5000},
+    ]
+
+    def fetch(author: str) -> list[object]:
+        return list(rows) if author == model_scout.AUTHORS[0] else []
+
+    monkeypatch.setattr(model_scout, "fetch_hf_models", fetch)
+    forward = model_scout.discover_candidates(
+        budget=_BUDGET, notes=[], now=datetime(2026, 9, 1, 9, 0)
+    )
+    rows.reverse()
+    backward = model_scout.discover_candidates(
+        budget=_BUDGET, notes=[], now=datetime(2026, 9, 1, 9, 0)
+    )
+
+    assert [c.id for c in forward] == [c.id for c in backward]
+    assert [c.id for c in forward] == sorted(c.id for c in forward)
