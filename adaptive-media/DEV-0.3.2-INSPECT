@@ -1,6 +1,0 @@
-Inspect reconstructed 0.3.2 source for:
-- managed input.conf/config-dir wiring
-- ESC fullscreen binding propagation
-- Vulkan FIFO motion plan wiring
-- explicit UTF-8 mpv diagnostics capture
-- multi-adapter diagnostics hint
