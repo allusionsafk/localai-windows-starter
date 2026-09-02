@@ -53,28 +53,38 @@ jobs:
           & (Join-Path $mediaDir 'Apply-Stable-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.2-Dev3.ps1') -SourceRoot $src
           Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
 
-      - name: Verify graphics-profile compatibility assumptions
+      - name: Verify renderer and deterministic integration assumptions
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
           $confText = [IO.File]::ReadAllText((Join-Path $root 'payload\mpv-config\mpv.conf'))
           $engineText = [IO.File]::ReadAllText((Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'))
+          $backendText = [IO.File]::ReadAllText((Join-Path $root 'src\AdaptiveMedia.App\BackendBridge.cs'))
+          $programText = [IO.File]::ReadAllText((Join-Path $root 'src\AdaptiveMedia.App\Program.cs'))
           if ($confText -notmatch '(?ms)^\[compatibility\].*?gpu-api=d3d11.*?gpu-context=d3d11') { throw 'Compatibility profile is not explicitly D3D11.' }
           if ($confText -notmatch '(?ms)^\[nvidia\].*?gpu-api=vulkan.*?gpu-context=winvk') { throw 'NVIDIA profile is not explicitly Vulkan/winvk.' }
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--vulkan-swap-mode=fifo')"))).Count -ne 1) { throw 'FIFO must be added once at final renderer decision.' }
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-api=d3d11')"))).Count -ne 1) { throw 'RTX VPP gpu-api=d3d11 override missing or duplicated.' }
           if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX VPP gpu-context=d3d11 override missing or duplicated.' }
           if ($engineText -notmatch [regex]::Escape("`$MpvArgs.Contains('--profile=compatibility') -or `$MpvArgs.Contains('--gpu-api=d3d11') -or `$MpvArgs.Contains('--gpu-context=d3d11')")) { throw 'D3D11 FIFO guard missing.' }
+          if (([regex]::Matches($engineText, 'ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')).Count -ne 1) { throw 'Engine deterministic probe hook missing or duplicated.' }
+          if (([regex]::Matches($engineText, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 1) { throw 'Engine deterministic NVIDIA hook missing or duplicated.' }
+          if (([regex]::Matches($backendText, 'ADAPTIVE_MEDIA_INTEGRATION_PROBE_JSON')).Count -ne 1) { throw 'BackendBridge deterministic probe handoff missing or duplicated.' }
+          if (([regex]::Matches($backendText, 'ADAPTIVE_MEDIA_INTEGRATION_NVIDIA')).Count -ne 1) { throw 'BackendBridge deterministic NVIDIA handoff missing or duplicated.' }
+          foreach ($needle in @('syntheticSdr1080Probe','new PlaybackOptions("Enhanced", "RtxVsr", "Smooth", false, true)','nvidia-true-hdr=yes','scaling-mode=nvidia')) {
+            if (-not $programText.Contains($needle)) { throw "Deterministic RTX integration assertion missing: $needle" }
+          }
           $apiIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-api=d3d11')")
           $contextIndex = $engineText.IndexOf("`$MpvArgs.Add('--gpu-context=d3d11')")
           $fifoDecisionIndex = $engineText.IndexOf('$finalUsesD3d11 =')
           if ($apiIndex -lt 0 -or $contextIndex -le $apiIndex -or $fifoDecisionIndex -le $contextIndex) { throw 'RTX D3D11 pairing/final FIFO ordering is invalid.' }
-          Write-Host 'Renderer-aware motion and RTX D3D11 pairing: PASS'
+          Write-Host 'Renderer-aware motion + deterministic RTX integration assumptions: PASS'
 
-      - name: Build and isolated smoke-test 0.3.2-dev2
+      - name: Build and isolated smoke-test 0.3.2-dev3
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -92,43 +102,45 @@ jobs:
             throw
           }
 
-      - name: Verify 0.3.2-dev2 candidate
+      - name: Verify 0.3.2-dev3 candidate
         id: artifact
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
           $dist = Join-Path $root 'dist'
-          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev2-x64.exe'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev3-x64.exe'
           $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
           $input = Join-Path $root 'payload\mpv-config\input.conf'
           $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
-          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev2 installer was not produced.' }
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev3 installer was not produced.' }
           $engineText = [IO.File]::ReadAllText($engine)
           $inputText = [IO.File]::ReadAllText($input)
           $programText = [IO.File]::ReadAllText($program)
           if (([regex]::Matches($engineText, [regex]::Escape('--vulkan-swap-mode=fifo'))).Count -ne 1) { throw 'Renderer-aware FIFO implementation must have one final add site.' }
-          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-api=d3d11')"))).Count -ne 1) { throw 'RTX D3D11 API override missing.' }
-          if (([regex]::Matches($engineText, [regex]::Escape(".Add('--gpu-context=d3d11')"))).Count -ne 1) { throw 'RTX D3D11 context override missing.' }
           if ($inputText -notmatch '(?m)^ESC\s+set\s+fullscreen\s+no\s*$') { throw 'Managed ESC fullscreen binding missing.' }
           if ($inputText -match '(?im)^\s*ESC\s+.*\bquit(?:-watch-later)?\b') { throw 'ESC quit binding remains.' }
           foreach ($needle in @(
             'new PlaybackOptions("Compatibility", "Off", "Smooth", false, false)',
             'Has(compatibilitySmooth, "--vulkan-swap-mode=fifo")',
-            '!Has(enhanced, "--vulkan-swap-mode=fifo")',
-            '!Has(gentle, "--vulkan-swap-mode=fifo")'
+            'syntheticSdr1080Probe',
+            '!Has(rtx, "--gpu-api=d3d11")',
+            '!Has(rtx, "--gpu-context=d3d11")',
+            'Has(rtx, "--vulkan-swap-mode=fifo")',
+            'scaling-mode=nvidia',
+            'nvidia-true-hdr=yes'
           )) { if (-not $programText.Contains($needle)) { throw "Integration coverage missing: $needle" } }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
-          "$hash  AdaptiveMediaSetup-0.3.2-dev2-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev2-x64.sha256.txt') -Encoding ascii
+          "$hash  AdaptiveMediaSetup-0.3.2-dev3-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev3-x64.sha256.txt') -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_OUTPUT
-          Write-Host "0.3.2-dev2 candidate SHA-256: $hash"
+          Write-Host "0.3.2-dev3 candidate SHA-256: $hash"
 
       - name: Upload private dev artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AdaptiveMedia-0.3.2-dev2-x64
+          name: AdaptiveMedia-0.3.2-dev3-x64
           path: |
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev2-x64.exe
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev2-x64.sha256.txt
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev3-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev3-x64.sha256.txt
           if-no-files-found: error
           retention-days: 14
