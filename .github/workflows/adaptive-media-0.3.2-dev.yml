@@ -6,6 +6,8 @@ on:
       - adaptive-media-dev
     paths:
       - adaptive-media/DEV-0.3.2
+      - adaptive-media/Test-0.3.2-Hardware.ps1
+      - adaptive-media/Test-0.3.2-Hardware.cmd
 
 permissions:
   contents: read
@@ -18,6 +20,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Self-test hardware certification gate
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\adaptive-media\Test-0.3.2-Hardware.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Hardware certification gate self-test returned exit code $LASTEXITCODE" }
 
       - name: Set up .NET 10 SDK
         uses: actions/setup-dotnet@v4
