@@ -42,7 +42,7 @@ jobs:
           $expected = $hashText.Substring(0,64).ToLowerInvariant()
           if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid stable source SHA-256 text: $expected" }
           $parts = @(Get-ChildItem -LiteralPath $mediaDir -Filter 'AdaptiveMedia-0.3.0-Source.part*.b64' -File | Sort-Object Name)
-          if ($parts.Count -ne 5) { throw "Expected 5 source transport parts; found $($parts.Count)." }
+          if ($parts.Count -ne 5) { throw "Expected 5 stable source transport parts; found $($parts.Count)." }
           $encoded = ($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }) -join ''
           [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
           $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
@@ -59,17 +59,18 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $app = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source\src\AdaptiveMedia.App'
-          $patterns = @('MPV version:', 'ProcessStartInfo', 'ReadToEnd', 'StandardOutputEncoding', 'Diagnostics', '--version')
+          $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
+          $patterns = @('MPV version:', 'mpv version', '--version', 'Diagnostics', 'OutputEncoding', 'Console]::OutputEncoding', 'Start-Process', 'Invoke-Expression', '& $', 'Get-Mpv')
           foreach ($pattern in $patterns) {
             Write-Host "--- source matches: $pattern ---"
-            $matches = @(Get-ChildItem -LiteralPath $app -Filter '*.cs' -File -Recurse | Select-String -SimpleMatch $pattern -Context 4,6)
+            $matches = @(Get-ChildItem -LiteralPath $root -File -Recurse -Include '*.cs','*.ps1' | Select-String -SimpleMatch $pattern -Context 7,10)
             if ($matches.Count -eq 0) { Write-Host '(none)' }
             foreach ($m in $matches) {
               Write-Host ("FILE {0}:{1}" -f $m.Path, $m.LineNumber)
               Write-Host ($m.Context.PreContext -join [Environment]::NewLine)
               Write-Host $m.Line
               Write-Host ($m.Context.PostContext -join [Environment]::NewLine)
+              Write-Host '---'
             }
           }
 
