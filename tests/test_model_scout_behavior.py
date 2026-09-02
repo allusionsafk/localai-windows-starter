@@ -1166,6 +1166,13 @@ def test_read_scout_groups_roundtrips(
     monkeypatch.setattr(
         model_scout, "repo_path", lambda *parts: tmp_path.joinpath(*parts)
     )
+    monkeypatch.setattr(
+        model_scout,
+        "get_budget",
+        lambda timeout_sec, vram_override=None: _budget(),
+    )
+    monkeypatch.setenv("OLLAMA_NUM_PARALLEL", "1")
+    monkeypatch.setenv("OLLAMA_KV_CACHE_TYPE", "q8_0")
     assert model_scout.read_scout_groups() is None  # no cache yet
     provisional = model_scout.collect_provisional_groups(
         _budget(), [], parallel=1, kv_factor=0.5
@@ -1265,14 +1272,14 @@ def test_a_smaller_quant_never_shrinks_below_the_heuristic() -> None:
     sizing = model_scout.resolve_weight_sizing(total_b=14.0, quant="Q3_K_M")
     assert sizing is not None
     assert sizing.gb == heuristic
-    assert sizing.provenance == "global-heuristic"
+    assert sizing.provenance == "bpw-table+heuristic-floor"
 
 
-def test_missing_size_and_unknown_quant_falls_back_to_the_estimator() -> None:
+def test_missing_size_and_unknown_quant_stays_unverified() -> None:
     sizing = model_scout.resolve_weight_sizing(total_b=9.0, quant="NOT_A_QUANT")
     assert sizing is not None
-    assert sizing.provenance == "global-heuristic"
-    assert sizing.gb == round(9.0 * model_scout.WEIGHTS_GB_PER_B, 1)
+    assert sizing.provenance == "unverified-tensor-width"
+    assert sizing.gb is None
     # No parameter count and no measurement is genuinely unknown, not zero.
     assert model_scout.resolve_weight_sizing(total_b=None, quant="Q4_K_M") is None
 

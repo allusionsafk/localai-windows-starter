@@ -107,3 +107,27 @@ Tests are written first and must demonstrate RED against PR #11 for:
 
 No installer tier, model default, Modelfile, preflight, release, site, private
 repository, or external benchmark data is changed.
+
+## Review follow-up hardening
+
+The PR #12 adversarial review tightened four boundaries without changing the
+approved pipeline or its request bound:
+
+- discovery and provisional grouping preserve candidates by exact repository
+  identity; normalized display names are never a pre-shortlist de-duplication
+  key;
+- known unsized FP8, MXFP4, NVFP4, BF16, and F16 artefacts use conservative
+  storage widths, while a parsed tensor type with no defined safe width remains
+  unverified rather than inheriting a Q4-shaped global estimate;
+- `RemoteFinalistEvidence`, `CuratedFinalistEvidence`, and
+  `FinalizedCandidate` make the final-fit boundary structural. Public
+  provisional APIs have no `final=True` promotion switch, and `FinalRanking`
+  validates both evidence identity and the fit context used to produce it;
+- cache schema version 2 binds final results to RAM, VRAM, request parallelism,
+  KV factor, and every category target context. Readers reject legacy,
+  partial, malformed, mismatched, and candidate-provisional payloads. Writers
+  flush a same-directory temporary file and atomically replace the cache.
+
+The maximum remains five discovery requests plus 18 tree/config pairs: 41
+requests for one Scout execution, with exact-repository de-duplication lowering
+the actual total when a finalist appears in multiple categories.

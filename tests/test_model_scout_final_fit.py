@@ -64,14 +64,15 @@ def _evidence(
 
 
 def _final_fit(candidate: model_scout.Candidate, evidence) -> model_scout.FitEstimate:
-    return model_scout.category_fit(
-        candidate,
+    return model_scout.final_category_fit(
+        model_scout.FinalizedCandidate(
+            candidate,
+            model_scout.RemoteFinalistEvidence(candidate.id, evidence),
+        ),
         _BUDGET,
         ctx=16384,
         parallel=1,
         kv_factor=0.5,
-        evidence=evidence,
-        final=True,
     )
 
 
@@ -268,9 +269,12 @@ def test_prepare_pick_reuses_attached_evidence_without_refetching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     evidence = _evidence(weight_gib=30.0)
+    finalist_evidence = model_scout.RemoteFinalistEvidence(
+        "author/Too-Large-9B-GGUF", evidence
+    )
     pick = replace(
         _candidate("author/Too-Large-9B-GGUF"),
-        evidence=evidence,
+        evidence=finalist_evidence,
         fit_stage="final",
     )
 
@@ -464,10 +468,8 @@ def test_final_wrapper_cannot_relabel_provisional_candidates() -> None:
     provisional = model_scout.collect_provisional_groups(
         _BUDGET, [_candidate("author/Model-9B-GGUF")], parallel=1, kv_factor=0.5
     )
-    falsely_wrapped = model_scout.FinalRanking(provisional.groups)
-
-    with pytest.raises(ValueError, match="final-stage"):
-        model_scout.groups_to_dict(falsely_wrapped)
+    with pytest.raises(ValueError, match="finalization evidence"):
+        model_scout.FinalRanking(provisional.groups)
 
 
 def test_markdown_log_exposes_final_provenance(
@@ -488,6 +490,10 @@ def test_markdown_log_exposes_final_provenance(
         weight_provenance="global-heuristic",
         kv_provenance="param-buckets",
         runtime_support="unverified",
+        evidence=model_scout.RemoteFinalistEvidence(
+            "author/Logged-9B-GGUF",
+            _evidence(weight_gib=6.0),
+        ),
     )
     groups = {
         category.id: model_scout.CategoryResult(
@@ -503,7 +509,19 @@ def test_markdown_log_exposes_final_provenance(
     model_scout.write_model_scout_log(
         mode="Scout",
         now=datetime(2026, 8, 31, 12, 0),
-        groups=groups,
+        ranking=model_scout.FinalRanking(
+            groups,
+            fit_context=model_scout.FitContext(
+                ram_gb=32,
+                vram_gb=12,
+                parallel=1,
+                kv_factor=0.5,
+                category_contexts=tuple(
+                    (category.id, category.target_ctx)
+                    for category in model_scout.CATEGORIES
+                ),
+            ),
+        ),
         pick=None,
         notes=[],
     )

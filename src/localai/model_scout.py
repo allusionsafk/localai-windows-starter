@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -55,6 +58,19 @@ DEFAULT_GROUNDED_CTX = 8192
 # enrichment. Six categories therefore cap the union at 18 unique finalists.
 FINALISTS_PER_CATEGORY = 3
 MAX_ENRICHED_FINALISTS = FINALISTS_PER_CATEGORY * len(CATEGORIES)
+SCOUT_CACHE_SCHEMA_VERSION = 2
+
+# Static parameter-count evidence for curated Ollama tags. A curated entry not
+# listed here has no sizing evidence and therefore cannot enter FinalRanking.
+# This is deliberately separate from filename parsing: the allowlist is the
+# explicit trust boundary for local/static fallbacks.
+CURATED_STATIC_TOTAL_B: dict[str, float] = {
+    "qwen3.5:9b-32k": 9.0,
+    "qwen3-coder:30b": 30.0,
+    "qwen2.5-coder:14b": 14.0,
+    "qwen2.5vl:7b": 7.0,
+    "web-nav-qwen3.5-9b": 9.0,
+}
 
 QUANT_PREFERENCE = (
     "Q4_K_M",
@@ -193,6 +209,13 @@ QUANT_BPW: dict[str, float] = {
     "F32": 32.0,
     "F16": 16.0,
     "BF16": 16.0,
+    # Recognized non-Q storage formats. MXFP4 is 4 data bits plus one
+    # 8-bit E8M0 scale per 32 values (4.25 effective bpw). NVFP4 is 4 data
+    # bits plus one 8-bit E4M3 scale per 16 values (4.5 effective bpw; the
+    # single global FP32 scale is negligible but never subtracted).
+    "FP8": 8.0,
+    "MXFP4": 4.25,
+    "NVFP4": 4.5,
     "Q8_0": 8.0,
     "Q8_1": 8.0,
     "Q6_K": 6.5625,
@@ -256,13 +279,14 @@ class WeightSizing:
 
     ``measured-file``     exact bytes of the artefact that will be pulled;
     ``bpw-table``         derived from the quant's bits-per-weight;
-    ``global-heuristic``  ``total_params x WEIGHTS_GB_PER_B`` - today's estimate.
+    ``global-heuristic``  ``total_params x WEIGHTS_GB_PER_B`` - today's estimate;
+    ``unverified-tensor-width``  parsed type with no safe storage-width rule.
 
     ``gb`` is binary GiB in every case, matching the hardware budgets it is
     compared against (see GIB).
     """
 
-    gb: float
+    gb: float | None
     quant: str | None
     provenance: str
 
@@ -309,13 +333,20 @@ def resolve_weight_sizing(
     heuristic = total_b * WEIGHTS_GB_PER_B
     bpw = quant_bits_per_weight(quant)
     if bpw is None:
+        if quant:
+            # A parsed tensor tag with no defined storage width is evidence
+            # that the Q4-shaped global heuristic is the wrong model. Keep the
+            # size explicitly unknown so final fit cannot become stronger.
+            return WeightSizing(None, quant, "unverified-tensor-width")
         return WeightSizing(round(heuristic, 1), quant, "global-heuristic")
     from_bpw = total_b * bpw / 8.0
     if from_bpw > heuristic:
         return WeightSizing(round(from_bpw, 1), quant, "bpw-table")
     # A base-type figure below the heuristic understates a K-quant's
     # higher-precision tensors; keep the conservative number.
-    return WeightSizing(round(heuristic, 1), quant, "global-heuristic")
+    return WeightSizing(
+        round(heuristic, 1), quant, "bpw-table+heuristic-floor"
+    )
 
 
 @dataclass(frozen=True)
@@ -344,7 +375,7 @@ class Candidate:
     kv_provenance: str = "param-buckets"
     runtime_support: str = "unverified"
     runtime_provenance: str = "not-checked"
-    evidence: CandidateEvidence | None = None
+    evidence: RemoteFinalistEvidence | CuratedFinalistEvidence | None = None
 
 
 def collect_model_scout_report(
@@ -465,7 +496,7 @@ def collect_model_scout_report(
     write_model_scout_log(
         mode=normalized_mode,
         now=stamp,
-        groups=groups,
+        ranking=final_ranking,
         pick=pick,
         notes=notes,
         prepare_lines=prepare_log,
@@ -521,7 +552,8 @@ def prepare_pick(
     repo = pick.id
     # Final Scout picks already carry the tree/config results. Legacy or manual
     # callers without evidence retain the old on-demand resolution path.
-    resolved = pick.evidence
+    finalist_evidence = pick.evidence
+    resolved = finalist_evidence.resolved if finalist_evidence else None
     artefact = (
         resolved.artefact
         if resolved is not None
@@ -536,16 +568,24 @@ def prepare_pick(
             artefact_bytes=artefact.size_bytes if artefact else None,
         )
     # Never let a missing measurement look smaller than the scout's own estimate.
-    need_gb = max(sizing.gb if sizing else 0.0, pick.size_gb or 0.0)
+    need_gb = max(
+        sizing.gb if sizing and sizing.gb is not None else 0.0,
+        pick.size_gb or 0.0,
+    )
 
     say(f"[+] Quant chosen for {format_num(budget.vram_gb)}GB VRAM: {quant}")
-    if sizing and sizing.provenance == "measured-file":
+    measured_gb = sizing.gb if sizing else None
+    if (
+        sizing is not None
+        and measured_gb is not None
+        and sizing.provenance == "measured-file"
+    ):
         estimate = pick.size_gb
-        detail = f"    artefact size: {format_num(sizing.gb)}GB (measured)"
-        if estimate and abs(estimate - sizing.gb) >= 0.5:
+        detail = f"    artefact size: {format_num(measured_gb)}GB (measured)"
+        if estimate and abs(estimate - measured_gb) >= 0.5:
             detail += f", scout estimated {format_num(estimate)}GB"
         say(detail)
-    elif sizing:
+    elif sizing and sizing.gb is not None:
         say(f"    artefact size: ~{format_num(sizing.gb)}GB ({sizing.provenance})")
 
     # KV at the context this pick will actually be built with. The scout ranked
@@ -584,7 +624,7 @@ def prepare_pick(
     # plus its KV reservation cannot be resident at all, stop before the
     # multi-gigabyte download rather than discovering it at load time.
     ram_ceil = budget.ram_gb - RAM_HEADROOM_GB
-    if sizing and sizing.provenance == "measured-file":
+    if sizing and sizing.gb is not None and sizing.provenance == "measured-file":
         resident = round(sizing.gb + kv_gb, 2)
         if resident > ram_ceil:
             say(
@@ -1056,9 +1096,14 @@ def discover_candidates(
             )
             rows.append(with_score)
 
+    # Preserve repository identity through category shortlisting. Separate
+    # publishers often use the same display/model name for materially
+    # different artefacts; collapsing those names here prevents exact evidence
+    # from ever choosing the better repository. Only duplicate API records for
+    # the exact repository are consolidated.
     by_key: dict[str, Candidate] = {}
     for candidate in rows:
-        key = re.sub(r"[^a-z0-9]", "", candidate.name.lower())
+        key = candidate.id
         if key not in by_key or candidate.score > by_key[key].score:
             by_key[key] = candidate
     return sorted(by_key.values(), key=lambda item: item.score, reverse=True)
@@ -1212,6 +1257,56 @@ class CandidateEvidence:
     architecture: ArchitectureInfo | None
     runtime_support: str = "unverified"
     runtime_provenance: str = "no-positive-runtime-evidence"
+
+
+@dataclass(frozen=True)
+class RemoteFinalistEvidence:
+    """Evidence produced by attempting both remote finalist lookups."""
+
+    repository_id: str
+    resolved: CandidateEvidence
+
+
+@dataclass(frozen=True)
+class CuratedFinalistEvidence:
+    """Explicit static evidence path for a curated fallback seed."""
+
+    repository_id: str
+    resolved: CandidateEvidence
+
+
+FinalistEvidence = RemoteFinalistEvidence | CuratedFinalistEvidence
+
+
+def _validate_finalist_evidence(
+    repository_id: str,
+    evidence: FinalistEvidence,
+) -> None:
+    if evidence.repository_id != repository_id:
+        raise ValueError("finalization evidence repository does not match candidate")
+    resolved = evidence.resolved
+    sizing = resolved.weights
+    if sizing is None or sizing.gb is None or sizing.gb <= 0:
+        raise ValueError("finalization evidence requires resolved weight sizing")
+    if resolved.runtime_support not in {
+        "supported",
+        "unsupported",
+        "unverified",
+    }:
+        raise ValueError("finalization evidence has invalid runtime status")
+    if not resolved.runtime_provenance:
+        raise ValueError("finalization evidence requires runtime provenance")
+
+
+@dataclass(frozen=True)
+class FinalizedCandidate:
+    """A candidate that crossed an explicit remote or curated boundary."""
+
+    candidate: Candidate
+    evidence: FinalistEvidence
+
+    def __post_init__(self) -> None:
+        _validate_finalist_evidence(self.candidate.id, self.evidence)
 
 
 def parse_architecture(config: object) -> ArchitectureInfo | None:
@@ -1380,7 +1475,7 @@ class FitEstimate:
     runtime_provenance: str = "not-checked"
 
 
-def category_fit(
+def _category_fit(
     candidate: Candidate,
     budget: Budget,
     *,
@@ -1421,13 +1516,27 @@ def category_fit(
             stage=stage,
             confidence="unverified" if final else "provisional",
             residency="unverified",
+            weight_provenance="unverified",
             runtime_support=runtime_support,
             runtime_provenance=runtime_provenance,
         )
     sizing = evidence.weights if final and evidence is not None else None
     if sizing is None:
         sizing = resolve_weight_sizing(total_b=candidate.total)
-    weights = sizing.gb if sizing is not None else 0.0
+    if sizing is not None and sizing.gb is None:
+        return FitEstimate(
+            "Unknown",
+            0.0,
+            0.0,
+            f"WARN: no safe width for tensor type {sizing.quant or 'unknown'}",
+            stage=stage,
+            confidence="unverified" if final else "provisional",
+            residency="unverified",
+            weight_provenance=sizing.provenance,
+            runtime_support=runtime_support,
+            runtime_provenance=runtime_provenance,
+        )
+    weights = sizing.gb if sizing is not None and sizing.gb is not None else 0.0
     weight_provenance = sizing.provenance if sizing else "unverified"
     architecture = evidence.architecture if final and evidence is not None else None
     kv, kv_provenance = resolve_kv_gb(
@@ -1532,6 +1641,45 @@ def category_fit(
     )
 
 
+def category_fit(
+    candidate: Candidate,
+    budget: Budget,
+    *,
+    ctx: int,
+    parallel: int,
+    kv_factor: float,
+) -> FitEstimate:
+    """Cheap provisional fit; it cannot be promoted by a boolean argument."""
+    return _category_fit(
+        candidate,
+        budget,
+        ctx=ctx,
+        parallel=parallel,
+        kv_factor=kv_factor,
+    )
+
+
+def final_category_fit(
+    finalized: FinalizedCandidate,
+    budget: Budget,
+    *,
+    ctx: int,
+    parallel: int,
+    kv_factor: float,
+) -> FitEstimate:
+    """Final fit available only for an explicitly evidence-bearing candidate."""
+    _validate_finalist_evidence(finalized.candidate.id, finalized.evidence)
+    return _category_fit(
+        finalized.candidate,
+        budget,
+        ctx=ctx,
+        parallel=parallel,
+        kv_factor=kv_factor,
+        evidence=finalized.evidence.resolved,
+        final=True,
+    )
+
+
 def candidate_eligible_for(candidate: Candidate, category: Category) -> bool:
     """True if this candidate's kind is one the category accepts."""
     return candidate.kind in category.kinds
@@ -1609,6 +1757,11 @@ def score_for_category(
 # Verdicts we treat as VRAM-infeasible for a best-pick: too big for RAM, size
 # unknown, or usable only via heavy CPU offload. "Tight" (minor spill) stays.
 _INFEASIBLE_VERDICTS = frozenset({"TooBig", "Unknown", "Poor", "Unsupported"})
+_FINAL_RECOMMENDATION_RESIDENCY = {
+    "Good": "full-gpu",
+    "OK": "host-loadable",
+    "Tight": "host-loadable",
+}
 
 
 @dataclass(frozen=True)
@@ -1630,10 +1783,112 @@ class ProvisionalRanking:
 
 
 @dataclass(frozen=True)
+class FitContext:
+    """Only inputs whose values can change a final fit decision."""
+
+    ram_gb: float
+    vram_gb: float
+    parallel: int
+    kv_factor: float
+    category_contexts: tuple[tuple[str, int], ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ramGb": self.ram_gb,
+            "vramGb": self.vram_gb,
+            "parallel": self.parallel,
+            "kvFactor": self.kv_factor,
+            "categoryContexts": {
+                category_id: target_ctx
+                for category_id, target_ctx in self.category_contexts
+            },
+        }
+
+    def fingerprint(self) -> str:
+        canonical = json.dumps(
+            self.as_dict(), sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+
+
+def _fit_context(
+    budget: Budget, *, parallel: int, kv_factor: float
+) -> FitContext:
+    return FitContext(
+        ram_gb=budget.ram_gb,
+        vram_gb=budget.vram_gb,
+        parallel=parallel,
+        kv_factor=kv_factor,
+        category_contexts=tuple(
+            (category.id, category.target_ctx) for category in CATEGORIES
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class FinalRanking:
     """Enriched category ranking safe for CLI, cache, and dashboard output."""
 
     groups: dict[str, CategoryResult]
+    fit_context: FitContext | None = None
+
+    def __post_init__(self) -> None:
+        expected = {category.id for category in CATEGORIES}
+        if set(self.groups) != expected:
+            raise ValueError("final ranking must contain every configured category")
+        for category_id, result in self.groups.items():
+            candidates = tuple(
+                candidate
+                for candidate in (result.top, *result.runners_up)
+                if candidate is not None
+            )
+            scores = tuple(candidate.score for candidate in candidates)
+            if (
+                result.category != category_id
+                or len(result.runners_up) > 2
+                or (result.top is None and bool(result.runners_up))
+                or scores != tuple(sorted(scores, reverse=True))
+                or len({candidate.id for candidate in candidates}) != len(candidates)
+                or any(not name or not reason for name, reason in result.dropped)
+            ):
+                raise ValueError("final ranking contains an invalid category result")
+            for candidate in candidates:
+                evidence = candidate.evidence
+                if (
+                    candidate.fit_stage != "final"
+                    or not isinstance(
+                        evidence, (RemoteFinalistEvidence, CuratedFinalistEvidence)
+                    )
+                    or evidence.repository_id != candidate.id
+                ):
+                    raise ValueError("final ranking requires finalization evidence")
+                try:
+                    _validate_finalist_evidence(candidate.id, evidence)
+                except ValueError as exc:
+                    raise ValueError(
+                        "final ranking requires finalization evidence"
+                    ) from exc
+                expected_residency = _FINAL_RECOMMENDATION_RESIDENCY.get(
+                    candidate.verdict
+                )
+                if (
+                    expected_residency is None
+                    or candidate.residency != expected_residency
+                    or candidate.runtime_support == "unsupported"
+                    or (
+                        isinstance(evidence, CuratedFinalistEvidence)
+                        and candidate.fit_confidence != "unverified"
+                    )
+                    or (
+                        isinstance(evidence, RemoteFinalistEvidence)
+                        and candidate.fit_confidence == "unverified"
+                    )
+                ):
+                    raise ValueError(
+                        "final ranking contains contradictory final semantics"
+                    )
+        if self.fit_context is None:
+            raise ValueError("final ranking requires a fit context")
 
 
 def _curated_candidate(tag: str) -> Candidate:
@@ -1643,19 +1898,44 @@ def _curated_candidate(tag: str) -> Candidate:
     )
 
 
+def _curated_finalist(tag: str) -> FinalizedCandidate | None:
+    """Build a curated finalist only from an explicit static sizing record."""
+    total_b = CURATED_STATIC_TOTAL_B.get(tag)
+    if total_b is None:
+        return None
+    candidate = replace(_curated_candidate(tag), total=total_b)
+    sizing = resolve_weight_sizing(total_b=total_b)
+    if sizing is None or sizing.gb is None:
+        return None
+    return FinalizedCandidate(
+        candidate,
+        CuratedFinalistEvidence(
+            repository_id=candidate.id,
+            resolved=CandidateEvidence(
+                artefact=None,
+                weights=sizing,
+                architecture=None,
+                runtime_support="unverified",
+                runtime_provenance="curated-static-parameter-record",
+            ),
+        ),
+    )
+
+
 def _compose_category_why(top: Candidate, category: Category) -> str:
     axes = sorted(category.weights, key=lambda item: abs(item[1]), reverse=True)[:2]
     emphasis = ", ".join(axis for axis, _weight in axes)
     return f"Best on {emphasis} for {category.label.lower()}: {top.fit_why}"
 
 
-def collect_scout_groups(
+def _collect_scout_groups(
     budget: Budget,
-    candidates: list[Candidate],
+    candidates: list[Candidate] | list[FinalizedCandidate],
     *,
     parallel: int | None = None,
     kv_factor: float | None = None,
     final: bool = False,
+    include_curated: bool = False,
 ) -> dict[str, CategoryResult]:
     """Group candidates into a best pick + runners-up per task category.
 
@@ -1668,51 +1948,59 @@ def collect_scout_groups(
     factor = read_kv_factor() if kv_factor is None else kv_factor
     results: dict[str, CategoryResult] = {}
     for category in CATEGORIES:
-        pool = [*candidates, *(_curated_candidate(tag) for tag in category.curated)]
+        pool: list[tuple[Candidate, FinalistEvidence | None]] = []
+        if final:
+            for item in candidates:
+                if not isinstance(item, FinalizedCandidate):
+                    raise ValueError("final grouping requires finalization evidence")
+                pool.append((item.candidate, item.evidence))
+            for tag in category.curated:
+                curated_finalist = _curated_finalist(tag)
+                if curated_finalist is not None:
+                    pool.append(
+                        (curated_finalist.candidate, curated_finalist.evidence)
+                    )
+        else:
+            for item in candidates:
+                if not isinstance(item, Candidate):
+                    raise ValueError("provisional grouping requires raw candidates")
+                pool.append((item, None))
+            if include_curated:
+                pool.extend(
+                    (_curated_candidate(tag), None) for tag in category.curated
+                )
         scored: list[Candidate] = []
         dropped: list[tuple[str, str]] = []
         seen: set[str] = set()
-        for candidate in pool:
+        for candidate, candidate_evidence in pool:
             if not candidate_eligible_for(candidate, category):
                 continue
-            key = re.sub(r"[^a-z0-9]", "", candidate.name.lower())
+            key = candidate.id
             if key in seen:
                 continue
-            curated = candidate.author == "curated"
-            candidate_evidence = candidate.evidence if final else None
-            if final and candidate_evidence is None:
-                candidate_evidence = CandidateEvidence(
-                    artefact=None,
-                    weights=resolve_weight_sizing(total_b=candidate.total),
-                    architecture=None,
-                    runtime_support="unverified",
-                    runtime_provenance=(
-                        "curated-without-remote-evidence"
-                        if curated
-                        else "missing-finalist-evidence"
-                    ),
+            if final:
+                if candidate_evidence is None:
+                    raise ValueError("final grouping requires finalization evidence")
+                fit = final_category_fit(
+                    FinalizedCandidate(candidate, candidate_evidence),
+                    budget,
+                    ctx=category.target_ctx,
+                    parallel=slots,
+                    kv_factor=factor,
                 )
-            fit = category_fit(
-                candidate,
-                budget,
-                ctx=category.target_ctx,
-                parallel=slots,
-                kv_factor=factor,
-                evidence=candidate_evidence,
-                final=final,
-            )
+                if isinstance(candidate_evidence, CuratedFinalistEvidence):
+                    fit = replace(fit, confidence="unverified")
+            else:
+                fit = category_fit(
+                    candidate,
+                    budget,
+                    ctx=category.target_ctx,
+                    parallel=slots,
+                    kv_factor=factor,
+                )
             if fit.verdict in _INFEASIBLE_VERDICTS:
-                if not curated:
-                    dropped.append((candidate.name, fit.why))
-                    continue
-                # A pre-vetted seed with no size metadata: trust it at this ctx.
-                fit = replace(
-                    fit,
-                    verdict="OK",
-                    why=f"curated seed (assumed to fit {category.target_ctx // 1024}k)",
-                    confidence="unverified" if final else fit.confidence,
-                    residency="unverified" if final else fit.residency,
-                )
+                dropped.append((candidate.name, fit.why))
+                continue
             seen.add(key)
             scored.append(
                 replace(
@@ -1745,6 +2033,24 @@ def collect_scout_groups(
     return results
 
 
+def collect_scout_groups(
+    budget: Budget,
+    candidates: list[Candidate],
+    *,
+    parallel: int | None = None,
+    kv_factor: float | None = None,
+) -> dict[str, CategoryResult]:
+    """Backward-compatible provisional grouping with no finalization switch."""
+    return _collect_scout_groups(
+        budget,
+        candidates,
+        parallel=parallel,
+        kv_factor=kv_factor,
+        final=False,
+        include_curated=True,
+    )
+
+
 def collect_provisional_groups(
     budget: Budget,
     candidates: list[Candidate],
@@ -1754,12 +2060,13 @@ def collect_provisional_groups(
 ) -> ProvisionalRanking:
     """Build the cheap internal ranking used only to select finalists."""
     return ProvisionalRanking(
-        collect_scout_groups(
+        _collect_scout_groups(
             budget,
             candidates,
             parallel=parallel,
             kv_factor=kv_factor,
             final=False,
+            include_curated=False,
         )
     )
 
@@ -1782,21 +2089,27 @@ def select_bounded_finalists(
     return tuple(finalists[:MAX_ENRICHED_FINALISTS])
 
 
-def enrich_finalists(finalists: tuple[Candidate, ...]) -> tuple[Candidate, ...]:
+def enrich_finalists(
+    finalists: tuple[Candidate, ...],
+) -> tuple[FinalizedCandidate, ...]:
     """Enrich each unique bounded finalist once within this scout execution."""
-    enriched: list[Candidate] = []
+    enriched: list[FinalizedCandidate] = []
     seen: set[str] = set()
     for candidate in finalists[:MAX_ENRICHED_FINALISTS]:
         if candidate.id in seen:
             continue
         seen.add(candidate.id)
-        enriched.append(
-            replace(
-                candidate,
-                evidence=enrich_candidate(candidate),
-                fit_stage="final",
-            )
+        evidence = RemoteFinalistEvidence(
+            repository_id=candidate.id,
+            resolved=enrich_candidate(candidate),
         )
+        try:
+            enriched.append(
+                FinalizedCandidate(candidate=candidate, evidence=evidence)
+            )
+        except ValueError:
+            # Missing or unsafe sizing cannot become authoritative final state.
+            continue
     return tuple(enriched)
 
 
@@ -1808,21 +2121,26 @@ def collect_final_groups(
     kv_factor: float | None = None,
 ) -> FinalRanking:
     """Enrich the bounded union, recompute final fit, and rerank every category."""
+    slots = read_num_parallel() if parallel is None else parallel
+    factor = read_kv_factor() if kv_factor is None else kv_factor
     finalists = enrich_finalists(select_bounded_finalists(provisional))
     return FinalRanking(
-        collect_scout_groups(
+        _collect_scout_groups(
             budget,
             list(finalists),
-            parallel=parallel,
-            kv_factor=kv_factor,
+            parallel=slots,
+            kv_factor=factor,
             final=True,
-        )
+        ),
+        fit_context=_fit_context(budget, parallel=slots, kv_factor=factor),
     )
 
 
 def _candidate_to_dict(candidate: Candidate | None) -> dict[str, object] | None:
     if candidate is None:
         return None
+    finalist_evidence = candidate.evidence
+    resolved = finalist_evidence.resolved if finalist_evidence else None
     return {
         "id": candidate.id,
         "name": candidate.name,
@@ -1841,14 +2159,21 @@ def _candidate_to_dict(candidate: Candidate | None) -> dict[str, object] | None:
         "kvProvenance": candidate.kv_provenance,
         "runtimeSupport": candidate.runtime_support,
         "runtimeProvenance": candidate.runtime_provenance,
+        "finalizationSource": (
+            "remote"
+            if isinstance(finalist_evidence, RemoteFinalistEvidence)
+            else "curated"
+            if isinstance(finalist_evidence, CuratedFinalistEvidence)
+            else None
+        ),
         "tensorType": (
-            candidate.evidence.artefact.quant
-            if candidate.evidence and candidate.evidence.artefact
+            resolved.artefact.quant
+            if resolved and resolved.artefact
             else None
         ),
         "quantOrigin": (
-            candidate.evidence.artefact.quant_origin
-            if candidate.evidence and candidate.evidence.artefact
+            resolved.artefact.quant_origin
+            if resolved and resolved.artefact
             else "unverified"
         ),
     }
@@ -1879,14 +2204,216 @@ def groups_to_dict(ranking: FinalRanking | ProvisionalRanking) -> dict[str, obje
 
 def write_scout_groups(ranking: FinalRanking, *, now: datetime) -> None:
     """Persist the grouped report the dashboard reads (logs/model-scout-groups.json)."""
+    if ranking.fit_context is None:  # guarded by FinalRanking, narrows for mypy
+        raise ValueError("final ranking requires a fit context")
     path = repo_path("logs", "model-scout-groups.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        "schemaVersion": SCOUT_CACHE_SCHEMA_VERSION,
         "generated": now.strftime("%Y-%m-%d %H:%M"),
         "fitStage": "final",
+        "fitContext": ranking.fit_context.as_dict(),
+        "fitContextFingerprint": ranking.fit_context.fingerprint(),
         "groups": groups_to_dict(ranking),
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.stem}-",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            json.dump(payload, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+_CACHE_RESIDENCIES = frozenset(
+    {
+        "full-gpu",
+        "host-loadable",
+        "not-loadable",
+        "non-interactive",
+        "unsupported",
+        "unverified",
+    }
+)
+_CACHE_CONFIDENCES = frozenset({"exact", "fallback", "unverified"})
+_CACHE_RUNTIME_SUPPORT = frozenset({"supported", "unsupported", "unverified"})
+_CACHE_KV_PROVENANCE = frozenset({"exact-architecture", "param-buckets"})
+_CACHE_WEIGHT_PROVENANCE = frozenset(
+    {
+        "measured-file",
+        "bpw-table",
+        "bpw-table+heuristic-floor",
+        "global-heuristic",
+        "unverified",
+        "unverified-tensor-width",
+    }
+)
+
+
+def _valid_cached_candidate(value: object) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict):
+        return False
+    required = {
+        "id",
+        "name",
+        "verdict",
+        "sizeGb",
+        "score",
+        "reasoning",
+        "curated",
+        "downloads",
+        "family",
+        "why",
+        "fitStage",
+        "fitConfidence",
+        "residency",
+        "weightProvenance",
+        "kvProvenance",
+        "runtimeSupport",
+        "runtimeProvenance",
+        "finalizationSource",
+        "tensorType",
+        "quantOrigin",
+    }
+    if not required.issubset(value):
+        return False
+    string_enums = (
+        isinstance(value["verdict"], str)
+        and isinstance(value["fitConfidence"], str)
+        and isinstance(value["residency"], str)
+        and isinstance(value["weightProvenance"], str)
+        and isinstance(value["kvProvenance"], str)
+        and isinstance(value["runtimeSupport"], str)
+        and isinstance(value["finalizationSource"], str)
+    )
+    if not string_enums:
+        return False
+    size = value["sizeGb"]
+    score = value["score"]
+    downloads = value["downloads"]
+    tensor_type = value["tensorType"]
+    source = value["finalizationSource"]
+    curated = value["curated"]
+    valid = (
+        isinstance(value["id"], str)
+        and bool(value["id"])
+        and isinstance(value["name"], str) and bool(value["name"])
+        and value["verdict"] in _FINAL_RECOMMENDATION_RESIDENCY
+        and value["fitStage"] == "final"
+        and value["fitConfidence"] in _CACHE_CONFIDENCES
+        and value["residency"] in _CACHE_RESIDENCIES
+        and value["weightProvenance"] in _CACHE_WEIGHT_PROVENANCE
+        and value["kvProvenance"] in _CACHE_KV_PROVENANCE
+        and value["runtimeSupport"] in _CACHE_RUNTIME_SUPPORT
+        and isinstance(value["runtimeProvenance"], str)
+        and bool(value["runtimeProvenance"])
+        and source in {"remote", "curated"}
+        and isinstance(size, (int, float)) and not isinstance(size, bool)
+        and math.isfinite(float(size)) and size > 0
+        and isinstance(score, (int, float)) and not isinstance(score, bool)
+        and math.isfinite(float(score))
+        and isinstance(value["reasoning"], bool)
+        and isinstance(curated, bool)
+        and isinstance(downloads, int) and not isinstance(downloads, bool)
+        and downloads >= 0
+        and isinstance(value["family"], str) and bool(value["family"])
+        and isinstance(value["why"], str) and bool(value["why"])
+        and (tensor_type is None or isinstance(tensor_type, str))
+        and isinstance(value["quantOrigin"], str)
+        and bool(value["quantOrigin"])
+    )
+    if not valid:
+        return False
+    if (source == "curated") != curated:
+        return False
+    if value["residency"] != _FINAL_RECOMMENDATION_RESIDENCY[value["verdict"]]:
+        return False
+    if value["runtimeSupport"] == "unsupported":
+        return False
+    if source == "curated" and value["fitConfidence"] != "unverified":
+        return False
+    if source == "remote" and value["fitConfidence"] == "unverified":
+        return False
+    if value["weightProvenance"] == "measured-file" and not tensor_type:
+        return False
+    if value["weightProvenance"].startswith("bpw-table") and not tensor_type:
+        return False
+    if value["weightProvenance"] in {
+        "unverified",
+        "unverified-tensor-width",
+    }:
+        return False
+    return not (
+        value["fitConfidence"] == "exact"
+        and not (
+            value["weightProvenance"] == "measured-file"
+            and value["kvProvenance"] == "exact-architecture"
+        )
+    )
+
+
+def _valid_cached_drop(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"name", "reason"}
+        and isinstance(value["name"], str)
+        and bool(value["name"])
+        and isinstance(value["reason"], str)
+        and bool(value["reason"])
+    )
+
+
+def _valid_cached_groups(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    expected = {category.id for category in CATEGORIES}
+    if set(value) != expected:
+        return False
+    for category_id, group in value.items():
+        if not isinstance(group, dict) or group.get("category") != category_id:
+            return False
+        required = {"category", "top", "runnersUp", "why", "dropped"}
+        if not required.issubset(group):
+            return False
+        runners = group.get("runnersUp")
+        dropped = group.get("dropped")
+        top = group.get("top")
+        if (
+            not _valid_cached_candidate(top)
+            or not isinstance(runners, list)
+            or len(runners) > 2
+            or not all(
+                isinstance(item, dict) and _valid_cached_candidate(item)
+                for item in runners
+            )
+            or (top is None and bool(runners))
+            or not isinstance(group.get("why"), str)
+            or not bool(group.get("why"))
+            or not isinstance(dropped, list)
+            or not all(_valid_cached_drop(item) for item in dropped)
+        ):
+            return False
+        candidates = ([top] if isinstance(top, dict) else []) + runners
+        ids = [candidate["id"] for candidate in candidates]
+        if len(ids) != len(set(ids)):
+            return False
+        scores = [float(candidate["score"]) for candidate in candidates]
+        if scores != sorted(scores, reverse=True):
+            return False
+    return True
 
 
 def read_scout_groups() -> dict[str, object] | None:
@@ -1898,11 +2425,29 @@ def read_scout_groups() -> dict[str, object] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if not isinstance(data, dict) or data.get("fitStage") != "final":
-        # Pre-final-fit caches contain provisional verdicts. Never let an old
-        # ``Good`` regain authority merely because the dashboard started first.
+    try:
+        valid = (
+            isinstance(data, dict)
+            and data.get("schemaVersion") == SCOUT_CACHE_SCHEMA_VERSION
+            and data.get("fitStage") == "final"
+            and _valid_cached_groups(data.get("groups"))
+        )
+    except (TypeError, ValueError):
         return None
-    return data
+    if not valid:
+        return None
+    current_budget = get_budget(timeout_sec=5)
+    current_context = _fit_context(
+        current_budget,
+        parallel=read_num_parallel(),
+        kv_factor=read_kv_factor(),
+    )
+    if (
+        data.get("fitContext") != current_context.as_dict()
+        or data.get("fitContextFingerprint") != current_context.fingerprint()
+    ):
+        return None
+    return cast(dict[str, object], data)
 
 
 def fit_candidate(
@@ -2019,11 +2564,15 @@ def write_model_scout_log(
     *,
     mode: str,
     now: datetime,
-    groups: dict[str, CategoryResult],
+    ranking: FinalRanking | ProvisionalRanking,
     pick: Candidate | None,
     notes: list[str],
     prepare_lines: list[str] | None = None,
 ) -> None:
+    if isinstance(ranking, ProvisionalRanking):
+        raise ValueError("provisional ranking cannot be written as a final log")
+    groups_to_dict(ranking)
+    groups = ranking.groups
     path = repo_path("logs", "model-scout-log.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"## {now.strftime('%Y-%m-%d %H:%M')}  (mode: {mode})"]
