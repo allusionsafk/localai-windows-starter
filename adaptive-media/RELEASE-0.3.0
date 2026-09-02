@@ -1,2 +1,2 @@
 trigger stable 0.3.0 Windows build, isolated smoke validation, and GitHub release
-retry: normalized checksum BOM handling on Windows runner
+retry: corrected full 64-character source SHA-256
