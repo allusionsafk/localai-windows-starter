@@ -10,13 +10,12 @@ Scope:
 - diagnostics label multi-adapter / NVIDIA+Intel topology as an informational hint only
 - 0.3.1 remains the frozen friend-test release
 
-Dev3 validation target:
-- all dev2 renderer-aware and Compatibility regressions remain green
-- synthetic 1080p SDR + NVIDIA capability is accepted only by the headless PlanJson integration path
-- interactive/real playback probe logic must remain untouched
-- RTX VSR + RTX Video HDR launch plan must include D3D11 API/context, d3d11vpp features, and no Vulkan FIFO
-- patch reconstruction must be line-ending agnostic on Windows runners
-- full private build/self-test/integration/install/uninstall gate
-- hardware certification script must pass its own Windows PowerShell 5.1 argument/refresh helper self-test
-- hardware certification remains a local runtime gate and must not weaken or replace the existing CI product gates
+Dev4 validation target:
+- preserve all green dev3 playback, renderer, RTX, fullscreen, diagnostics, and deterministic integration semantics
+- hardware certification script must pass its standalone Windows PowerShell 5.1 self-test before build
+- bundle that exact reviewed PS1/CMD into the private installer without source drift
+- isolated installer smoke must prove the certification files are installed and the installed PS1 self-test passes
+- interactive installer completion page defaults to objective hardware certification; normal app launch remains optional
+- silent CI installs must skip all postinstall UI actions
+- final deliverable for this stage is one private installer EXE, not an Actions ZIP/manual extraction workflow
 - no public tag or release
