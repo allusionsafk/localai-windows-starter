@@ -55,24 +55,17 @@ jobs:
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev.ps1') -SourceRoot $src
           Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
 
-      - name: Inspect diagnostics process/encoding implementation
+      - name: Verify graphics-profile compatibility assumptions
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
-          $patterns = @('MPV version:', 'mpv version', '--version', 'Diagnostics', 'OutputEncoding', 'Console]::OutputEncoding', 'Start-Process', 'Invoke-Expression', '& $', 'Get-Mpv')
-          foreach ($pattern in $patterns) {
-            Write-Host "--- source matches: $pattern ---"
-            $matches = @(Get-ChildItem -LiteralPath $root -File -Recurse -Include '*.cs','*.ps1' | Select-String -SimpleMatch $pattern -Context 7,10)
-            if ($matches.Count -eq 0) { Write-Host '(none)' }
-            foreach ($m in $matches) {
-              Write-Host ("FILE {0}:{1}" -f $m.Path, $m.LineNumber)
-              Write-Host ($m.Context.PreContext -join [Environment]::NewLine)
-              Write-Host $m.Line
-              Write-Host ($m.Context.PostContext -join [Environment]::NewLine)
-              Write-Host '---'
-            }
-          }
+          $conf = Join-Path $root 'payload\mpv-config\mpv.conf'
+          $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
+          Write-Host '--- managed mpv.conf ---'
+          Get-Content -LiteralPath $conf
+          Write-Host '--- motion/context engine lines ---'
+          Get-Content -LiteralPath $engine | Select-String -Pattern 'gpu-context|profile=nvidia|display-resample|vulkan-swap-mode|compatibility' -Context 2,2
 
       - name: Build and isolated smoke-test 0.3.2-dev1
         shell: powershell
