@@ -1,0 +1,104 @@
+name: Adaptive Media 0.3.1 Release
+
+on:
+  push:
+    branches:
+      - adaptive-media-dev
+    paths:
+      - adaptive-media/RELEASE-0.3.1
+
+permissions:
+  contents: write
+
+jobs:
+  build-test-release:
+    runs-on: windows-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+
+      - name: Reconstruct reviewed stable source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mediaDir = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'AdaptiveMedia-0.3.0-Source.zip'
+          $src = Join-Path $mediaDir 'source'
+          $hashText = Get-Content (Join-Path $mediaDir 'AdaptiveMedia-0.3.0-Source.sha256.txt') -Raw
+          $hashText = ($hashText -replace [char]0xFEFF, '').Trim()
+          if ($hashText.Length -lt 64) { throw 'Stable source checksum file is too short.' }
+          $expected = $hashText.Substring(0,64).ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid stable source SHA-256 text: $expected" }
+          $parts = @(Get-ChildItem -LiteralPath $mediaDir -Filter 'AdaptiveMedia-0.3.0-Source.part*.b64' -File | Sort-Object Name)
+          if ($parts.Count -ne 5) { throw "Expected 5 stable source transport parts; found $($parts.Count)." }
+          $encoded = ($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Stable source archive hash mismatch: expected=$expected actual=$actual" }
+          Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $src | Out-Null
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $src -Force
+          & (Join-Path $mediaDir 'Apply-Stable-Hotfix.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.1-Hotfix.ps1') -SourceRoot $src
+          Write-Host "Reviewed 0.3.0 source hash verified before 0.3.1 patch: $actual"
+
+      - name: Build and isolated smoke-test 0.3.1 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source')
+          .\scripts\Build-Dev.ps1 -Clean -SmokeTest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify final 0.3.1 artifact and checksum
+        id: artifact
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source\dist'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.1-x64.exe'
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.1 installer was not produced.' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
+          "$hash  AdaptiveMediaSetup-0.3.1-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.1-x64.sha256.txt') -Encoding ascii
+          "installer=$installer" >> $env:GITHUB_OUTPUT
+          "checksum=$(Join-Path $dist 'AdaptiveMediaSetup-0.3.1-x64.sha256.txt')" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Host "FINAL 0.3.1 INSTALLER SHA-256: $hash"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdaptiveMedia-0.3.1-x64
+          path: |
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.1-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.1-x64.sha256.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\Publish-Release.ps1') `
+            -Tag 'v0.3.1' `
+            -Title 'Adaptive Media 0.3.1' `
+            -NotesFile (Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\RELEASE-NOTES-0.3.1.md') `
+            -Installer '${{ steps.artifact.outputs.installer }}' `
+            -Checksum '${{ steps.artifact.outputs.checksum }}' `
+            -Repo $env:GITHUB_REPOSITORY `
+            -Target $env:GITHUB_SHA
