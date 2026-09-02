@@ -7,69 +7,29 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Read-Normalized([string]$Path) {
-    return ([IO.File]::ReadAllText($Path) -replace "`r`n", "`n")
-}
-
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
 }
 
 $enginePath = Join-Path $SourceRoot 'payload\AdaptiveMedia.Engine.ps1'
 $programPath = Join-Path $SourceRoot 'src\AdaptiveMedia.App\Program.cs'
-
 if (-not (Test-Path -LiteralPath $enginePath)) { throw "Engine not found: $enginePath" }
 if (-not (Test-Path -LiteralPath $programPath)) { throw "Program.cs not found: $programPath" }
 
-$engine = Read-Normalized $enginePath
+$engine = [IO.File]::ReadAllText($enginePath)
 
-$oldPlan = @'
-    if ($PlanJson) {
-        [pscustomobject]@{
-            Executable = $mpv
-            Arguments = @($mpvArgs)
-            Profile = $profile
-            UpscaleMode = $RequestedUpscale
-            MotionMode = $RequestedMotion
-            Cleanup = $DoCleanup
-            RtxHdr = $DoRtxHdr
-        } | ConvertTo-Json -Depth 5 -Compress
-        try { Restore-HdrPolicy $hdrToken } catch {}
-        if ($playlist) { Remove-Item -LiteralPath $playlist -Force -ErrorAction SilentlyContinue }
-        return 0
-    }
-'@
+# In PlanJson mode the JSON object must remain stdout. `return 0` is function
+# pipeline output in PowerShell and was being captured together with the JSON.
+$planPattern = '(?s)(if \(\$PlanJson\) \{\s*\[pscustomobject\]@\{.*?ConvertTo-Json -Depth 5 -Compress\s*try \{ Restore-HdrPolicy \$hdrToken \} catch \{\}\s*if \(\$playlist\) \{ Remove-Item -LiteralPath \$playlist -Force -ErrorAction SilentlyContinue \}\s*)return 0(\s*\}\s*try \{)'
+$planReplacement = '$1return$2'
+$patchedEngine = [regex]::Replace($engine, $planPattern, $planReplacement, 1)
+if ($patchedEngine -eq $engine) { throw 'PlanJson numeric-return hotfix did not match the reviewed stable engine source.' }
+$engine = $patchedEngine
 
-$newPlan = @'
-    if ($PlanJson) {
-        [pscustomobject]@{
-            Executable = $mpv
-            Arguments = @($mpvArgs)
-            Profile = $profile
-            UpscaleMode = $RequestedUpscale
-            MotionMode = $RequestedMotion
-            Cleanup = $DoCleanup
-            RtxHdr = $DoRtxHdr
-        } | ConvertTo-Json -Depth 5 -Compress
-        try { Restore-HdrPolicy $hdrToken } catch {}
-        if ($playlist) { Remove-Item -LiteralPath $playlist -Force -ErrorAction SilentlyContinue }
-        # PlanJson writes exactly one JSON object to stdout. A numeric return value
-        # would become PowerShell pipeline output and capture/corrupt that contract.
-        return
-    }
-'@
-
-if (-not $engine.Contains($oldPlan)) { throw 'Expected PlanJson block was not found in stable engine source.' }
-$engine = $engine.Replace($oldPlan, $newPlan)
-
-$oldHeadless = @'
-if ($Headless) {
-    $code = Play-MediaHeadless @($LaunchItems) $PlaybackProfile $UpscaleMode $MotionMode ([bool]$Cleanup) ([bool]$RtxHdr) $YtdlFormat
-    exit $code
-}
-'@
-
-$newHeadless = @'
+# Dispatch PlanJson without assigning Play-MediaHeadless output to $code, otherwise
+# the WPF BackendBridge receives no JSON to deserialize.
+$headPattern = '(?ms)^if \(\$Headless\) \{\s*\$code = Play-MediaHeadless @\(\$LaunchItems\) \$PlaybackProfile \$UpscaleMode \$MotionMode \(\[bool\]\$Cleanup\) \(\[bool\]\$RtxHdr\) \$YtdlFormat\s*exit \$code\s*\}'
+$headReplacement = @'
 if ($Headless) {
     if ($PlanJson) {
         # Preserve launch-plan JSON on stdout for the compiled WPF BackendBridge.
@@ -80,37 +40,30 @@ if ($Headless) {
     exit [int]$code
 }
 '@
-
-if (-not $engine.Contains($oldHeadless)) { throw 'Expected headless dispatch block was not found in stable engine source.' }
-$engine = $engine.Replace($oldHeadless, $newHeadless)
+$patchedEngine = [regex]::Replace($engine, $headPattern, $headReplacement, 1)
+if ($patchedEngine -eq $engine) { throw 'Headless PlanJson dispatch hotfix did not match the reviewed stable engine source.' }
+$engine = $patchedEngine
 Write-Utf8NoBom $enginePath $engine
 
-$program = Read-Normalized $programPath
-$oldCatch = @'
-        catch
-        {
-            return 29;
-        }
-'@
-$newCatch = @'
+# Make any remaining integration failure self-diagnosing in Actions logs.
+$program = [IO.File]::ReadAllText($programPath)
+$catchPattern = '(?ms)^\s{8}catch\s*\{\s*return 29;\s*\}'
+$catchReplacement = @'
         catch (Exception ex)
         {
             Console.Error.WriteLine(ex);
             return 29;
         }
 '@
-if ($program.Contains($oldCatch)) {
-    $program = $program.Replace($oldCatch, $newCatch)
-    Write-Utf8NoBom $programPath $program
-}
+$patchedProgram = [regex]::Replace($program, $catchPattern, $catchReplacement, 1)
+if ($patchedProgram -ne $program) { Write-Utf8NoBom $programPath $patchedProgram }
 
-# Fail closed if the intended source semantics are not now present.
-$verifyEngine = Read-Normalized $enginePath
-if ($verifyEngine.Contains('return 0' + "`n    }" + "`n`n    try {") ) {
-    throw 'PlanJson numeric pipeline return still present after hotfix.'
+$verify = [IO.File]::ReadAllText($enginePath)
+if ($verify -notmatch '(?ms)^if \(\$Headless\) \{\s*if \(\$PlanJson\)') {
+    throw 'Stable headless PlanJson dispatch verification failed after hotfix.'
 }
-if (-not $verifyEngine.Contains('if ($PlanJson) {' + "`n        # Preserve launch-plan JSON on stdout")) {
-    throw 'Headless PlanJson dispatch verification failed after hotfix.'
+if ($verify -match '(?s)if \(\$PlanJson\) \{\s*\[pscustomobject\]@\{.*?ConvertTo-Json.*?return 0\s*\}\s*try \{') {
+    throw 'PlanJson numeric pipeline return remains after hotfix.'
 }
 
 Write-Host 'Stable headless launch-plan integration hotfix applied and verified.'
