@@ -53,7 +53,8 @@ jobs:
           Remove-Item -Recurse -Force $src -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $src | Out-Null
           Expand-Archive -LiteralPath $zipPath -DestinationPath $src -Force
-          Write-Host "Stable source SHA-256 verified: $actual"
+          & (Join-Path $mediaDir 'Apply-Stable-Hotfix.ps1') -SourceRoot $src
+          Write-Host "Stable source SHA-256 verified before reviewed hotfix: $actual"
 
       - name: Build and isolated smoke-test stable installer
         shell: powershell
