@@ -46,7 +46,7 @@ function Get-Release {
     $r = Invoke-Gh -Arguments @('api', "repos/$Repo/releases/tags/$ReleaseTag") -AllowFailure
     if ($r.ExitCode -eq 0) { return ($r.Output | ConvertFrom-Json) }
     if ($AllowMissing -and $r.Output -match '(?i)404|not found') { return $null }
-    throw "Unable to read release $ReleaseTag: $($r.Output)"
+    throw ("Unable to read release {0}: {1}" -f $ReleaseTag, $r.Output)
 }
 
 function Get-Asset {
