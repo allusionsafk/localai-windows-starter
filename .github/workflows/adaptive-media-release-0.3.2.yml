@@ -13,19 +13,20 @@ on:
     paths:
       - adaptive-media/RELEASE-0.3.2
 
+# Declared at workflow level, matching adaptive-media-release-0.3.1.yml, which is
+# the configuration that has actually published a release in this repository. A
+# job-level block granting contents:write under a workflow-level contents:read
+# was rejected with HTTP 403 on POST /releases.
+# actions:read is what lets actions/download-artifact reach the candidate run's
+# artifact by run-id.
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: write
-      # Required by actions/download-artifact when fetching another run's
-      # artifact via run-id; a job-level permissions block replaces the
-      # defaults, so this must be stated explicitly.
-      actions: read
 
     steps:
       - name: Check out repository

@@ -25,3 +25,9 @@
 
 source_run_id = 33729362639
 sha256 = 8E8CC44359FEA1A2BB4F5252F145025BB38ECEBB0B0DE66E7669C2C319944DBB
+
+# Retry note: the first publish attempt (run 33730106485) reached the release API
+# and was rejected with HTTP 403 because contents:write was requested in a
+# job-level permissions block under a workflow-level contents:read. No tag and no
+# release were created. The digest and run id above are unchanged, so this still
+# publishes exactly the installer that was certified.
