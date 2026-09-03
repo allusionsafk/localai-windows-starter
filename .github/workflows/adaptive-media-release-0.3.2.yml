@@ -1,0 +1,109 @@
+name: Adaptive Media 0.3.2 Release
+
+# Publishes the exact installer that was certified on real hardware. This
+# workflow never builds anything: it downloads the artifact produced by the
+# candidate run named in adaptive-media/RELEASE-0.3.2 and refuses to continue
+# unless that artifact's SHA-256 matches the digest recorded in the same file.
+# The certified digest is therefore committed evidence, reviewable in git,
+# rather than something typed into a dispatch box.
+on:
+  push:
+    branches:
+      - adaptive-media-dev
+    paths:
+      - adaptive-media/RELEASE-0.3.2
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read the certified candidate coordinates
+        id: certified
+        run: |
+          set -euo pipefail
+          f=adaptive-media/RELEASE-0.3.2
+          test -f "$f"
+          cat "$f"
+          run_id=$(grep -oP '^source_run_id\s*=\s*\K[0-9]+' "$f")
+          sha=$(grep -oiP '^sha256\s*=\s*\K[0-9a-f]{64}' "$f" | tr 'a-f' 'A-F')
+          test -n "$run_id"
+          test -n "$sha"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "certified run $run_id, digest $sha"
+
+      - name: Download the certified candidate without rebuilding it
+        uses: actions/download-artifact@v4
+        with:
+          name: AdaptiveMedia-0.3.2-x64
+          run-id: ${{ steps.certified.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
+
+      - name: Refuse to publish anything but the certified bits
+        run: |
+          set -euo pipefail
+          exe=dist/AdaptiveMediaSetup-0.3.2-x64.exe
+          test -f "$exe"
+          actual=$(sha256sum "$exe" | cut -d' ' -f1 | tr 'a-f' 'A-F')
+          expected='${{ steps.certified.outputs.sha }}'
+          echo "expected: $expected"
+          echo "actual  : $actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "The artifact from run ${{ steps.certified.outputs.run_id }} is not the installer that was certified."
+            exit 1
+          fi
+          grep -qi "$actual" dist/AdaptiveMediaSetup-0.3.2-x64.sha256.txt
+          echo "Publishing the exact certified installer."
+
+      - name: Refuse to disturb an existing release or the 0.3.1 baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.3.2 >/dev/null 2>&1; then
+            echo "A v0.3.2 release already exists; refusing to republish."
+            exit 1
+          fi
+          gh release view v0.3.1 --json tagName,isDraft,isPrerelease > /tmp/031.json
+          cat /tmp/031.json
+          grep -q '"tagName":"v0.3.1"' /tmp/031.json
+
+      - name: Publish v0.3.2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          target=$(gh run view "${{ steps.certified.outputs.run_id }}" --json headSha --jq .headSha)
+          echo "tagging v0.3.2 at $target"
+          gh release create v0.3.2 \
+            dist/AdaptiveMediaSetup-0.3.2-x64.exe \
+            dist/AdaptiveMediaSetup-0.3.2-x64.sha256.txt \
+            --title "Adaptive Media 0.3.2" \
+            --notes-file adaptive-media/RELEASE-NOTES-0.3.2.md \
+            --target "$target"
+
+      - name: Verify the published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view v0.3.2 --json tagName,name,isDraft,isPrerelease,assets > /tmp/032.json
+          cat /tmp/032.json
+          expected=$(echo '${{ steps.certified.outputs.sha }}' | tr 'A-F' 'a-f')
+          grep -q '"tagName":"v0.3.2"' /tmp/032.json
+          grep -q '"isDraft":false' /tmp/032.json
+          grep -q '"isPrerelease":false' /tmp/032.json
+          grep -q "sha256:$expected" /tmp/032.json
+          gh release view v0.3.1 --json tagName,isDraft,isPrerelease | grep -q '"tagName":"v0.3.1"'
+          echo "Published v0.3.2 with the certified installer digest; v0.3.1 untouched."
