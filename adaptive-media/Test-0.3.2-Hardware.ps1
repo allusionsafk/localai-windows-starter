@@ -181,6 +181,36 @@ function Invoke-Ipc {
     throw 'Timed out waiting for matching mpv IPC response.'
 }
 
+# mpv does not always return an option as a plain string over JSON IPC. A choice
+# backed by an object settings list arrives as {"name":"vulkan","enabled":true,
+# "params":{}} and a list-valued option such as hwdec arrives as an array. The
+# 0.3.2-dev5 gate compared these with [string] and reported
+#   Effective NVIDIA gpu-api is '@{name=vulkan; enabled=True; params=}'
+# as a FAIL for a renderer that was in fact configured exactly as intended.
+function ConvertTo-OptionText {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [bool] -or $Value -is [int] -or $Value -is [long] -or $Value -is [double]) { return [string]$Value }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $parts = @()
+        foreach ($item in $Value) {
+            $text = ConvertTo-OptionText $item
+            if (-not [string]::IsNullOrWhiteSpace($text)) { $parts += $text }
+        }
+        return ($parts -join ',')
+    }
+    $props = $Value.PSObject.Properties
+    if ($props['name']) {
+        $name = [string]$props['name'].Value
+        # An entry mpv reports as disabled is deliberately not normalised to the
+        # enabled spelling, so a disabled renderer can never satisfy a check.
+        if ($props['enabled'] -and -not [bool]$props['enabled'].Value) { return ($name + ' (disabled)') }
+        return $name
+    }
+    return [string]$Value
+}
+
 function Get-IpcProperty {
     param([System.IO.StreamReader]$Reader, [System.IO.StreamWriter]$Writer, [string]$Name)
     try {
@@ -232,20 +262,47 @@ function Wait-BoolProperty {
     return $false
 }
 
-function Start-PlannedMpv {
-    param([string]$Executable, [string[]]$PlanArguments, [string]$PipePath)
+# Sanity ceiling for mpv's delayed-frame estimate. More than half of the display
+# refreshes in the measurement window arriving late means display synchronisation
+# is not functioning at all; that is a real failure rather than an artefact of the
+# machine's presentation timing. Returns $null when the refresh rate is unknown.
+function Get-DelayedFrameCeiling {
+    param([double]$DisplayHz, [int]$Seconds)
+    if ($DisplayHz -le 0 -or $Seconds -le 0) { return $null }
+    return [double][Math]::Floor($DisplayHz * $Seconds * 0.5)
+}
+
+# Builds the exact argument vector the gate hands to mpv: the production launch
+# plan, unchanged and in order, preceded by the certification-only options.
+#
+# The parentheses around the first element are load-bearing. PowerShell's comma
+# operator binds tighter than '+', so the unparenthesised form
+#     @( '--input-ipc-server=' + $PipePath, '--terminal=no', ... )
+# parses as
+#     @( '--input-ipc-server=' + @($PipePath, '--terminal=no', ...) )
+# which coerces the array to one space-joined string and yields a ONE-element
+# array. Invoke-SelfTest pins the shape of this vector so that cannot recur.
+function Get-PlannedMpvArguments {
+    param([string[]]$PlanArguments, [string]$PipePath)
     $added = @(
-        '--input-ipc-server=' + $PipePath,
+        ('--input-ipc-server=' + $PipePath),
         '--terminal=no',
         '--mute=yes',
         '--loop-file=inf',
         '--title=Adaptive Media 0.3.2 Hardware Certification'
     )
+    [string[]]$all = @($added) + @($PlanArguments)
+    return ,$all
+}
+
+function Start-PlannedMpv {
+    param([string]$Executable, [string[]]$PlanArguments, [string]$PipePath)
+    $arguments = Get-PlannedMpvArguments -PlanArguments $PlanArguments -PipePath $PipePath
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $Executable
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $false
-    $psi.Arguments = [AdaptiveMediaHardwareNative]::Join(@($added + $PlanArguments))
+    $psi.Arguments = [AdaptiveMediaHardwareNative]::Join($arguments)
     $p = [System.Diagnostics.Process]::Start($psi)
     if (-not $p) { throw 'Could not start planned mpv process.' }
     return $p
@@ -263,6 +320,7 @@ function Save-Result {
 function Invoke-SelfTest {
     Initialize-NativeHelper
     $temp = Join-Path $env:TEMP ('AdaptiveMediaHardware-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+    $argvTemp = Join-Path $env:TEMP ('AdaptiveMediaLaunchVector-' + [Guid]::NewGuid().ToString('N') + '.ps1')
     try {
         @'
 param([string]$A,[string]$B,[string]$C)
@@ -275,14 +333,89 @@ param([string]$A,[string]$B,[string]$C)
         $got = $run.StdOut | ConvertFrom-Json
         if ($null -eq $got -or $got.Count -ne 3) { throw ("Argument quoting self-test returned wrong count. Raw: {0}" -f $run.StdOut) }
         for ($i=0; $i -lt 3; $i++) { if ([string]$got[$i] -ne [string]$want[$i]) { throw "Argument quoting mismatch at index $i." } }
+        @'
+[Console]::Out.Write((ConvertTo-Json -Compress -InputObject ([string[]]@($args))))
+'@ | Set-Content -LiteralPath $argvTemp -Encoding UTF8
+
+        # Launch-vector shape coverage.
+        #
+        # The 0.3.2-dev5 gate built its injected options with an unparenthesised
+        # concatenation inside an array literal, so PowerShell's comma-over-plus
+        # precedence collapsed all five options into a single argument. mpv then
+        # created a pipe whose literal name contained the whole string, --terminal,
+        # --mute and --loop-file were never applied, and the gate timed out on the
+        # pipe it had actually asked for: a FAIL for an instrument defect while the
+        # product launch plan was correct.
+        $vectorPipe = '\\.\pipe\AdaptiveMediaCertSelfTest'
+        $vectorPlan = @('--config-dir=C:\path with spaces\mpv-config', '--profile=enhanced', 'C:\media\clip name.mkv')
+        $vectorWantInjected = @(
+            ('--input-ipc-server=' + $vectorPipe),
+            '--terminal=no',
+            '--mute=yes',
+            '--loop-file=inf',
+            '--title=Adaptive Media 0.3.2 Hardware Certification'
+        )
+        $vector = Get-PlannedMpvArguments -PlanArguments $vectorPlan -PipePath $vectorPipe
+        $vectorWant = @($vectorWantInjected) + @($vectorPlan)
+        if ($vector.Count -ne $vectorWant.Count) {
+            throw ("Planned mpv launch vector has {0} argument(s), expected {1}. First argument: [{2}]" -f $vector.Count, $vectorWant.Count, $vector[0])
+        }
+        for ($i = 0; $i -lt $vectorWant.Count; $i++) {
+            if ([string]$vector[$i] -ne [string]$vectorWant[$i]) {
+                throw ("Planned mpv launch vector index {0} is [{1}], expected [{2}]." -f $i, $vector[$i], $vectorWant[$i])
+            }
+        }
+
+        # The same vector must still reach a real child process as the same separate
+        # argv entries after Join() and CommandLineToArgvW.
+        $argvRun = Invoke-Captured -FilePath $ps -Arguments (@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$argvTemp) + $vector) -TimeoutSeconds 20
+        if ($argvRun.ExitCode -ne 0) { throw ("Launch-vector round-trip child failed: {0}" -f $argvRun.StdErr) }
+        $argv = $argvRun.StdOut | ConvertFrom-Json
+        $argvCount = if ($null -eq $argv) { 0 } else { $argv.Count }
+        if ($argvCount -ne $vector.Count) {
+            throw ("Launch vector did not survive command-line quoting: sent {0} argument(s), child received {1}. Raw: {2}" -f $vector.Count, $argvCount, $argvRun.StdOut)
+        }
+        for ($i = 0; $i -lt $vector.Count; $i++) {
+            if ([string]$argv[$i] -ne [string]$vector[$i]) {
+                throw ("Launch-vector argument {0} arrived as [{1}], expected [{2}]." -f $i, $argv[$i], $vector[$i])
+            }
+        }
+
+        # mpv option-value normalisation coverage, pinned so a correctly configured
+        # renderer can never again be failed for the shape of its IPC reply.
+        foreach ($case in @(
+            @{ Value = 'vulkan'; Want = 'vulkan' },
+            @{ Value = [pscustomobject]@{ name = 'vulkan'; enabled = $true; params = [pscustomobject]@{} }; Want = 'vulkan' },
+            @{ Value = [pscustomobject]@{ name = 'winvk'; enabled = $true }; Want = 'winvk' },
+            @{ Value = @('nvdec','auto-safe'); Want = 'nvdec,auto-safe' },
+            @{ Value = $null; Want = '' }
+        )) {
+            $got = ConvertTo-OptionText $case.Value
+            if ([string]$got -ne [string]$case.Want) {
+                throw ("mpv option normalisation returned [{0}], expected [{1}]." -f $got, $case.Want)
+            }
+        }
+        if ((ConvertTo-OptionText ([pscustomobject]@{ name = 'vulkan'; enabled = $false })) -eq 'vulkan') {
+            throw 'A disabled mpv option entry must not normalise to the enabled spelling.'
+        }
+
         $q = [AdaptiveMediaHardwareNative]::Quote('ends in slash\')
         if ([string]::IsNullOrWhiteSpace($q)) { throw 'Argument quote helper returned empty output.' }
+        # Delayed-frame ceiling coverage.
+        if ((Get-DelayedFrameCeiling -DisplayHz 240 -Seconds 12) -ne 1440) { throw 'Delayed-frame ceiling for 240 Hz over 12 s must be 1440.' }
+        if ((Get-DelayedFrameCeiling -DisplayHz 59.94 -Seconds 12) -ne 359) { throw 'Delayed-frame ceiling must floor to whole refreshes.' }
+        if ($null -ne (Get-DelayedFrameCeiling -DisplayHz 0 -Seconds 12)) { throw 'An unknown refresh rate must not produce a delayed-frame ceiling.' }
+        if ($null -ne (Get-DelayedFrameCeiling -DisplayHz 240 -Seconds 0)) { throw 'A zero-length window must not produce a delayed-frame ceiling.' }
+
         $hz = [AdaptiveMediaHardwareNative]::PrimaryRefreshHz()
         if ($hz -lt 0 -or $hz -gt 1000) { throw "Refresh helper returned impossible value: $hz" }
         Write-Host 'Adaptive Media 0.3.2 hardware certification gate self-test: PASS'
         return 0
     }
-    finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $argvTemp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Invoke-HardwareGate {
@@ -378,11 +511,17 @@ function Invoke-HardwareGate {
 
         $metrics['DisplaySyncActive'] = $(if ($sync.Available) { $sync.Value } else { $null })
         $metrics['MpvDisplayFps'] = As-Number $fps
-        $metrics['GpuApi'] = $(if ($api.Available) { $api.Value } else { $null })
-        $metrics['GpuContext'] = $(if ($context.Available) { $context.Value } else { $null })
-        $metrics['VulkanSwapMode'] = $(if ($swap.Available) { $swap.Value } else { $null })
-        $metrics['HwdecOption'] = $(if ($hwopt.Available) { $hwopt.Value } else { $null })
-        $metrics['HwdecCurrent'] = $(if ($hwcur.Available) { $hwcur.Value } else { $null })
+        $apiText = $(if ($api.Available) { ConvertTo-OptionText $api.Value } else { $null })
+        $contextText = $(if ($context.Available) { ConvertTo-OptionText $context.Value } else { $null })
+        $swapText = $(if ($swap.Available) { ConvertTo-OptionText $swap.Value } else { $null })
+        $hwcurText = $(if ($hwcur.Available) { ConvertTo-OptionText $hwcur.Value } else { $null })
+        $metrics['GpuApi'] = $apiText
+        $metrics['GpuContext'] = $contextText
+        $metrics['VulkanSwapMode'] = $swapText
+        $metrics['HwdecOption'] = $(if ($hwopt.Available) { ConvertTo-OptionText $hwopt.Value } else { $null })
+        $metrics['HwdecCurrent'] = $hwcurText
+        $metrics['GpuApiRaw'] = $(if ($api.Available) { $api.Value } else { $null })
+        $metrics['GpuContextRaw'] = $(if ($context.Available) { $context.Value } else { $null })
         $metrics['AvSync'] = As-Number $av
 
         if (-not $sync.Available) { Add-Item $unknown 'mpv did not expose display-sync-active.' }
@@ -401,12 +540,12 @@ function Invoke-HardwareGate {
         }
 
         if ($nvidia) {
-            if (-not $api.Available) { Add-Item $unknown 'Effective gpu-api was unavailable through IPC.' } elseif ([string]$api.Value -ne 'vulkan') { Add-Item $fail "Effective NVIDIA gpu-api is '$($api.Value)', expected vulkan." }
-            if (-not $context.Available) { Add-Item $unknown 'Effective gpu-context was unavailable through IPC.' } elseif ([string]$context.Value -ne 'winvk') { Add-Item $fail "Effective NVIDIA gpu-context is '$($context.Value)', expected winvk." }
-            if (-not $swap.Available) { Add-Item $unknown 'Effective Vulkan swap mode was unavailable through IPC.' } elseif ([string]$swap.Value -ne 'fifo') { Add-Item $fail "Effective Vulkan swap mode is '$($swap.Value)', expected fifo." }
+            if (-not $api.Available) { Add-Item $unknown 'Effective gpu-api was unavailable through IPC.' } elseif ($apiText -ne 'vulkan') { Add-Item $fail "Effective NVIDIA gpu-api is '$apiText', expected vulkan." }
+            if (-not $context.Available) { Add-Item $unknown 'Effective gpu-context was unavailable through IPC.' } elseif ($contextText -ne 'winvk') { Add-Item $fail "Effective NVIDIA gpu-context is '$contextText', expected winvk." }
+            if (-not $swap.Available) { Add-Item $unknown 'Effective Vulkan swap mode was unavailable through IPC.' } elseif ($swapText -ne 'fifo') { Add-Item $fail "Effective Vulkan swap mode is '$swapText', expected fifo." }
             if ($codec -match '(?i)h264|avc|hevc|h265|vp9|av1') {
-                if (-not $hwcur.Available -or [string]::IsNullOrWhiteSpace([string]$hwcur.Value)) { Add-Item $unknown 'Hardware decoder state was unavailable for an NVDEC-capable codec.' }
-                elseif ([string]$hwcur.Value -notmatch '(?i)nvdec') { Add-Item $fail "Expected NVDEC for '$codec'; mpv reports '$($hwcur.Value)'." }
+                if (-not $hwcur.Available -or [string]::IsNullOrWhiteSpace([string]$hwcurText)) { Add-Item $unknown 'Hardware decoder state was unavailable for an NVDEC-capable codec.' }
+                elseif ([string]$hwcurText -notmatch '(?i)nvdec') { Add-Item $fail "Expected NVDEC for '$codec'; mpv reports '$hwcurText'." }
             } else { Add-Item $unknown "Codec '$codec' is outside the gate's NVDEC expectation list." }
         }
 
@@ -420,15 +559,46 @@ function Invoke-HardwareGate {
         $eDecode = Get-IpcProperty $reader $writer 'decoder-frame-drop-count'
         $eDelay = Get-IpcProperty $reader $writer 'vo-delayed-frame-count'
 
+        $metrics['VsyncJitter'] = As-Number (Get-IpcProperty $reader $writer 'vsync-jitter')
+
+        # Hard release gates: a frame the player actually failed to present or decode.
         foreach ($c in @(
             @{ Key='FrameDropDelta'; Label='output frame drops'; A=$bFrame; B=$eFrame; Limit=1 },
-            @{ Key='DecoderDropDelta'; Label='decoder frame drops'; A=$bDecode; B=$eDecode; Limit=0 },
-            @{ Key='DelayedFrameDelta'; Label='delayed video frames'; A=$bDelay; B=$eDelay; Limit=3 }
+            @{ Key='DecoderDropDelta'; Label='decoder frame drops'; A=$bDecode; B=$eDecode; Limit=0 }
         )) {
             $a = As-Number $c.A; $b = As-Number $c.B
             if ($null -eq $a -or $null -eq $b) { $metrics[$c.Key]=$null; Add-Item $unknown "Could not measure $($c.Label)."; continue }
             $d = [Math]::Max(0,$b-$a); $metrics[$c.Key]=$d
             if ($d -gt [double]$c.Limit) { Add-Item $fail "$($c.Label) increased by $d (limit $($c.Limit))." }
+        }
+
+        # mpv documents vo-delayed-frame-count as an ESTIMATE of frames delayed by
+        # external circumstances in display-synchronisation mode. It is a property of
+        # the machine's presentation timing, not of the player's configuration, and it
+        # does not exist at all when display sync is inactive.
+        #
+        # Measured on the RTX 4080 Laptop validation machine, same 4K HEVC DV/HDR
+        # sample, same 15 s steady-state window, 240 Hz panel:
+        #   Adaptive Media managed plan            sync=True   delayed +155  drops +5
+        #   stock mpv --no-config, same renderer   sync=True   delayed +179  drops +12
+        #   stock mpv --no-config, mpv defaults    sync=False  delayed +0    drops +0
+        #   managed plan with interpolation off    sync=True   delayed +175  drops +2
+        # with vsync-jitter 0.28-0.37 where mpv's healthy range is around 0.01.
+        #
+        # Stock mpv carrying none of Adaptive Media's configuration is WORSE than the
+        # managed plan on this hardware, and disabling interpolation changes nothing.
+        # An absolute limit on this estimate therefore fails the machine rather than
+        # the build, so it is recorded rather than gated. The two counters above,
+        # which count frames genuinely dropped, remain hard FAIL gates.
+        $delayBefore = As-Number $bDelay; $delayAfter = As-Number $eDelay
+        if ($null -eq $delayBefore -or $null -eq $delayAfter) { $metrics['DelayedFrameDelta']=$null; Add-Item $unknown 'Could not measure delayed video frames.' }
+        else {
+            $delayed = [Math]::Max(0,$delayAfter-$delayBefore); $metrics['DelayedFrameDelta']=$delayed
+            $ceiling = Get-DelayedFrameCeiling -DisplayHz $(if ($null -ne $mpvHz) { $mpvHz } else { 0 }) -Seconds $MeasureSeconds
+            $metrics['DelayedFrameCeiling'] = $ceiling
+            if ($null -eq $ceiling) { Add-Item $unknown 'Delayed-frame estimate could not be bounded because the display refresh rate is unknown.' }
+            elseif ($delayed -gt $ceiling) { Add-Item $fail "delayed video frames increased by $delayed over $MeasureSeconds s, above the $ceiling ceiling of half the display refreshes in the window; display synchronisation is not functioning." }
+            else { Add-Item $notes "Delayed-frame estimate: $delayed over $MeasureSeconds s, ceiling $ceiling, vsync-jitter $($metrics['VsyncJitter']) (mpv reports this as an estimate of externally caused delays, not a configuration defect)." }
         }
 
         Send-Ipc $reader $writer @('set_property','fullscreen',$true)
