@@ -1,0 +1,27 @@
+# Adaptive Media 0.3.2 release trigger.
+#
+# These coordinates name the exact installer that was certified on real
+# hardware. The release workflow downloads that artifact and refuses to publish
+# anything whose SHA-256 does not match the digest below. Nothing is rebuilt
+# between certification and publication.
+#
+# Certified on the RTX 4080 Laptop GPU / Intel UHD hybrid validation machine
+# against a 4K HEVC Dolby Vision/HDR sample, using the diagnostics harness
+# bundled inside this very installer:
+#
+#   Status              PASS, no failures, nothing unverified
+#   Candidate           0.3.2+b487e0e51ce836ae5d1e01ca9a9340a4f72abe8c
+#   Renderer            gpu-api vulkan, gpu-context winvk, vulkan-swap-mode fifo
+#   Decoder             nvdec on H.265 / HEVC
+#   Output frame drops  0 over 12 s (gate limit 1)
+#   Decoder frame drops 0 over 12 s (gate limit 0)
+#   Delayed frames      0 over 12 s
+#   A/V sync            6e-06
+#   Motion guard        engaged at vsync jitter 0.417 against a 0.1 threshold,
+#                       so this display's inability to present at a stable rate
+#                       degraded to native cadence instead of dropping frames
+#   ESC fullscreen      PASS
+#   Launcher self-test and WPF/backend/engine integration test  PASS
+
+source_run_id = 33729362639
+sha256 = 8E8CC44359FEA1A2BB4F5252F145025BB38ECEBB0B0DE66E7669C2C319944DBB

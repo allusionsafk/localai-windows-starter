@@ -22,6 +22,10 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # Required by actions/download-artifact when fetching another run's
+      # artifact via run-id; a job-level permissions block replaces the
+      # defaults, so this must be stated explicitly.
+      actions: read
 
     steps:
       - name: Check out repository
