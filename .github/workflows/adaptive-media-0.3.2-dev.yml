@@ -11,6 +11,7 @@ on:
       - adaptive-media/Apply-0.3.2-Dev4.ps1
       - adaptive-media/Apply-0.3.2-Dev5.ps1
       - adaptive-media/Apply-0.3.2-Dev6.ps1
+      - adaptive-media/Apply-0.3.2-Dev7.ps1
 
 permissions:
   contents: read
@@ -42,7 +43,7 @@ jobs:
           choco install innosetup --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
 
-      - name: Reconstruct reviewed source and apply 0.3.2 dev6 patch stack
+      - name: Reconstruct reviewed source and apply 0.3.2 dev7 patch stack
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -69,6 +70,7 @@ jobs:
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev4.ps1') -SourceRoot $src -CertificationRoot $mediaDir
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev5.ps1') -SourceRoot $src
           & (Join-Path $mediaDir 'Apply-0.3.2-Dev6.ps1') -SourceRoot $src
+          & (Join-Path $mediaDir 'Apply-0.3.2-Dev7.ps1') -SourceRoot $src
           Write-Host "Reviewed 0.3.0 source hash verified before patch stack: $actual"
 
       - name: Verify renderer, deterministic integration, and bundled certification assumptions
@@ -126,9 +128,21 @@ jobs:
           if (([regex]::Matches($certText, [regex]::Escape('[AdaptiveMediaHardwareNative]::Join($arguments)'))).Count -ne 1) { throw 'Start-PlannedMpv no longer joins a single strongly typed argument vector.' }
           Write-Host 'Renderer-aware motion + deterministic RTX integration + bundled certification assumptions: PASS'
           Write-Host 'Repaired hardware certification instrument (launch vector + option normalisation): PASS'
+          $guardCond = 'profile-cond=(p.time_pos or 0) > 5 and (p.vsync_jitter or 0) > 0.1 and (p.vo_delayed_frame_count or 0) > 2 * (p.time_pos or 1)'
+          if (-not $confText.Contains('[motion-guard]')) { throw 'Managed mpv config is missing the automatic motion fallback profile.' }
+          if (-not $confText.Contains($guardCond)) { throw 'The motion guard condition is not the reviewed, measured one.' }
+          if ($confText -notmatch '(?ms)^\[motion-guard\].*?video-sync=audio.*?interpolation=no') { throw 'The motion guard does not fall back to native cadence.' }
+          if (([regex]::Matches($confText, [regex]::Escape('[motion-guard]'))).Count -ne 1) { throw 'Motion guard profile duplicated.' }
+          if (([regex]::Matches($confText, [regex]::Escape('profile-cond='))).Count -ne 1) { throw 'Exactly one conditional auto profile is expected in the managed mpv config.' }
+          if ($engineText.Contains('--profile=motion-guard')) { throw 'The engine must not request the motion guard explicitly; that would apply it unconditionally and disable smooth motion everywhere.' }
+          foreach ($needle in @('function Get-DisplaySyncVerdict','MotionGuardEngaged','MotionGuardJitterThreshold','Motion guard engaged')) {
+            if (-not $certText.Contains($needle)) { throw "The hardware gate does not understand the motion guard: $needle" }
+          }
+          if ($certText.Contains("elseif (-not [bool]`$sync.Value) { Add-Item `$fail 'mpv reports display-sync-active=false.' }")) { throw 'The hardware gate still fails unconditionally on inactive display sync and would reject a correct automatic fallback.' }
+          Write-Host 'Automatic motion fallback + gate awareness: PASS'
           Write-Host 'Compatibility D3D11 escape hatch guard + deterministic NVIDIA-profile coverage: PASS'
 
-      - name: Build and isolated smoke-test 0.3.2-dev6
+      - name: Build and isolated smoke-test 0.3.2-dev7
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -146,20 +160,20 @@ jobs:
             throw
           }
 
-      - name: Verify 0.3.2-dev6 candidate
+      - name: Verify 0.3.2-dev7 candidate
         id: artifact
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:GITHUB_WORKSPACE 'adaptive-media\source'
           $dist = Join-Path $root 'dist'
-          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev6-x64.exe'
+          $installer = Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev7-x64.exe'
           $engine = Join-Path $root 'payload\AdaptiveMedia.Engine.ps1'
           $input = Join-Path $root 'payload\mpv-config\input.conf'
           $program = Join-Path $root 'src\AdaptiveMedia.App\Program.cs'
           $stageCertPs1 = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.ps1'
           $stageCertCmd = Join-Path $root 'build\staging\certification\Test-0.3.2-Hardware.cmd'
-          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev6 installer was not produced.' }
+          if (-not (Test-Path -LiteralPath $installer)) { throw 'Expected 0.3.2-dev7 installer was not produced.' }
           if (-not (Test-Path -LiteralPath $stageCertPs1 -PathType Leaf) -or -not (Test-Path -LiteralPath $stageCertCmd -PathType Leaf)) { throw 'Staged hardware certification files are missing.' }
           $engineText = [IO.File]::ReadAllText($engine)
           $inputText = [IO.File]::ReadAllText($input)
@@ -178,16 +192,16 @@ jobs:
             'nvidia-true-hdr=yes'
           )) { if (-not $programText.Contains($needle)) { throw "Integration coverage missing: $needle" } }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToUpperInvariant()
-          "$hash  AdaptiveMediaSetup-0.3.2-dev6-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev6-x64.sha256.txt') -Encoding ascii
+          "$hash  AdaptiveMediaSetup-0.3.2-dev7-x64.exe" | Set-Content -LiteralPath (Join-Path $dist 'AdaptiveMediaSetup-0.3.2-dev7-x64.sha256.txt') -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_OUTPUT
-          Write-Host "0.3.2-dev6 candidate SHA-256: $hash"
+          Write-Host "0.3.2-dev7 candidate SHA-256: $hash"
 
       - name: Upload private dev artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AdaptiveMedia-0.3.2-dev6-x64
+          name: AdaptiveMedia-0.3.2-dev7-x64
           path: |
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev6-x64.exe
-            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev6-x64.sha256.txt
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev7-x64.exe
+            adaptive-media/source/dist/AdaptiveMediaSetup-0.3.2-dev7-x64.sha256.txt
           if-no-files-found: error
           retention-days: 14

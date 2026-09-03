@@ -12,6 +12,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
+# Must match profile-cond in the managed mpv.conf [motion-guard] profile. The
+# guard is only credited when measured vsync jitter actually exceeds this, so a
+# fallback cannot be used to excuse a display that was presenting normally.
+$MotionGuardJitterThreshold = 0.1
+
 # Objective real-hardware release gate for Adaptive Media 0.3.2.
 # Production launch-plan options are left intact. The only added mpv options are
 # JSON IPC, mute, loop, terminal suppression, and a diagnostic window title.
@@ -262,6 +267,43 @@ function Wait-BoolProperty {
     return $false
 }
 
+# Decides what mpv's display-synchronisation state means for a plan that asked
+# for display-synchronised motion. Kept pure so Invoke-SelfTest can pin every
+# branch without hardware. Returns Kind = active | guard | fail | unknown.
+function Get-DisplaySyncVerdict {
+    param(
+        $DisplaySyncActive,
+        [bool]$PlanRequestedDisplaySync,
+        [string]$VideoSync,
+        [string]$Interpolation,
+        $VsyncJitter,
+        [double]$JitterThreshold
+    )
+    $guardEngaged = $PlanRequestedDisplaySync -and ($VideoSync -eq 'audio')
+    if ($null -eq $DisplaySyncActive) {
+        return [pscustomobject]@{ Kind='unknown'; GuardEngaged=$guardEngaged; Message='mpv did not expose display-sync-active.' }
+    }
+    if ([bool]$DisplaySyncActive) {
+        if ($guardEngaged) {
+            return [pscustomobject]@{ Kind='fail'; GuardEngaged=$true; Message='mpv reports display sync active while running audio sync; the motion guard left playback in an inconsistent state.' }
+        }
+        return [pscustomobject]@{ Kind='active'; GuardEngaged=$false; Message=$null }
+    }
+    if (-not $guardEngaged) {
+        return [pscustomobject]@{ Kind='fail'; GuardEngaged=$false; Message='mpv reports display-sync-active=false.' }
+    }
+    if ($null -eq $VsyncJitter) {
+        return [pscustomobject]@{ Kind='unknown'; GuardEngaged=$true; Message='The motion guard engaged but the vsync jitter that justified it could not be read.' }
+    }
+    if ([double]$VsyncJitter -le $JitterThreshold) {
+        return [pscustomobject]@{ Kind='fail'; GuardEngaged=$true; Message=("The motion guard disengaged display synchronisation at vsync jitter {0:N5}, at or below its {1} threshold; the fallback must only trigger on a display that cannot present stably." -f [double]$VsyncJitter, $JitterThreshold) }
+    }
+    if ($Interpolation -notin @('no','False','false')) {
+        return [pscustomobject]@{ Kind='fail'; GuardEngaged=$true; Message=("The motion guard fell back to audio sync but left interpolation at '{0}'." -f $Interpolation) }
+    }
+    return [pscustomobject]@{ Kind='guard'; GuardEngaged=$true; Message=("Motion guard engaged: this display could not present at a stable rate (vsync jitter {0:N5} against a {1} threshold), so display-synchronised motion fell back to native cadence instead of dropping frames continuously." -f [double]$VsyncJitter, $JitterThreshold) }
+}
+
 # Sanity ceiling for mpv's delayed-frame estimate. More than half of the display
 # refreshes in the measurement window arriving late means display synchronisation
 # is not functioning at all; that is a real failure rather than an artefact of the
@@ -401,6 +443,30 @@ param([string]$A,[string]$B,[string]$C)
 
         $q = [AdaptiveMediaHardwareNative]::Quote('ends in slash\')
         if ([string]::IsNullOrWhiteSpace($q)) { throw 'Argument quote helper returned empty output.' }
+        # Display-sync / motion-guard verdict coverage. Every branch is pinned so
+        # the gate can neither fail a correct automatic fallback nor accept a
+        # fallback that was not justified by a measurably unstable display.
+        $verdictCases = @(
+            @{ Name='display sync active';            Active=$true;  Plan=$true;  Vs='display-resample'; Interp='False'; Jit=0.01; Want='active' },
+            @{ Name='guard engaged on bad display';   Active=$false; Plan=$true;  Vs='audio';            Interp='False'; Jit=0.34; Want='guard' },
+            @{ Name='guard claimed on stable display';Active=$false; Plan=$true;  Vs='audio';            Interp='False'; Jit=0.01; Want='fail' },
+            @{ Name='guard left interpolation on';    Active=$false; Plan=$true;  Vs='audio';            Interp='True';  Jit=0.34; Want='fail' },
+            @{ Name='display sync silently off';      Active=$false; Plan=$true;  Vs='display-resample'; Interp='True';  Jit=0.34; Want='fail' },
+            @{ Name='inconsistent guard state';       Active=$true;  Plan=$true;  Vs='audio';            Interp='False'; Jit=0.34; Want='fail' },
+            @{ Name='jitter unreadable after guard';  Active=$false; Plan=$true;  Vs='audio';            Interp='False'; Jit=$null; Want='unknown' },
+            @{ Name='display sync state unreadable';  Active=$null;  Plan=$true;  Vs='audio';            Interp='False'; Jit=0.34; Want='unknown' }
+        )
+        foreach ($case in $verdictCases) {
+            $v = Get-DisplaySyncVerdict -DisplaySyncActive $case.Active -PlanRequestedDisplaySync $case.Plan `
+                 -VideoSync $case.Vs -Interpolation $case.Interp -VsyncJitter $case.Jit -JitterThreshold 0.1
+            if ($v.Kind -ne $case.Want) {
+                throw ("Display-sync verdict for '{0}' is '{1}', expected '{2}'." -f $case.Name, $v.Kind, $case.Want)
+            }
+        }
+        if ((Get-DisplaySyncVerdict -DisplaySyncActive $false -PlanRequestedDisplaySync $false -VideoSync 'audio' -Interpolation 'False' -VsyncJitter 0.34 -JitterThreshold 0.1).Kind -ne 'fail') {
+            throw 'A plan that never requested display synchronisation must not be credited with a motion-guard fallback.'
+        }
+
         # Delayed-frame ceiling coverage.
         if ((Get-DelayedFrameCeiling -DisplayHz 240 -Seconds 12) -ne 1440) { throw 'Delayed-frame ceiling for 240 Hz over 12 s must be 1440.' }
         if ((Get-DelayedFrameCeiling -DisplayHz 59.94 -Seconds 12) -ne 359) { throw 'Delayed-frame ceiling must floor to whole refreshes.' }
@@ -508,7 +574,15 @@ function Invoke-HardwareGate {
         $hwopt = Get-IpcProperty $reader $writer 'options/hwdec'
         $hwcur = Get-IpcProperty $reader $writer 'hwdec-current'
         $av = Get-IpcProperty $reader $writer 'avsync'
+        $videoSync = Get-IpcProperty $reader $writer 'options/video-sync'
+        $interp = Get-IpcProperty $reader $writer 'options/interpolation'
+        $jitter = Get-IpcProperty $reader $writer 'vsync-jitter'
 
+        $videoSyncText = $(if ($videoSync.Available) { ConvertTo-OptionText $videoSync.Value } else { $null })
+        $metrics['VideoSync'] = $videoSyncText
+        $metrics['Interpolation'] = $(if ($interp.Available) { ConvertTo-OptionText $interp.Value } else { $null })
+        $metrics['VsyncJitter'] = As-Number $jitter
+        $metrics['MotionGuardJitterThreshold'] = $MotionGuardJitterThreshold
         $metrics['DisplaySyncActive'] = $(if ($sync.Available) { $sync.Value } else { $null })
         $metrics['MpvDisplayFps'] = As-Number $fps
         $apiText = $(if ($api.Available) { ConvertTo-OptionText $api.Value } else { $null })
@@ -524,8 +598,38 @@ function Invoke-HardwareGate {
         $metrics['GpuContextRaw'] = $(if ($context.Available) { $context.Value } else { $null })
         $metrics['AvSync'] = As-Number $av
 
-        if (-not $sync.Available) { Add-Item $unknown 'mpv did not expose display-sync-active.' }
-        elseif (-not [bool]$sync.Value) { Add-Item $fail 'mpv reports display-sync-active=false.' }
+        # Display synchronisation, and the product's automatic fallback from it.
+        #
+        # The launch plan requests display-synchronised motion. Two outcomes are
+        # acceptable, and both keep the frame-drop gates below at full strength:
+        #
+        #   1. Display sync is active. The display presents at a stable rate and
+        #      the interpolated path is being exercised as requested.
+        #   2. The motion guard engaged. mpv's conditional auto profile measured
+        #      the display failing to present stably while it was demonstrably
+        #      harming playback, and dropped back to native cadence rather than
+        #      show broken interpolated playback.
+        #
+        # Outcome 2 is only accepted on proof: the plan must have asked for
+        # display sync, mpv must now report audio sync with interpolation off,
+        # and the measured vsync jitter must actually exceed the guard's
+        # threshold. Display sync silently failing for any other reason stays a
+        # FAIL exactly as before.
+        $planRequestedDisplaySync = [bool](Has-Arg $plan '--video-sync=display-resample')
+        $verdict = Get-DisplaySyncVerdict `
+            -DisplaySyncActive $(if ($sync.Available) { [bool]$sync.Value } else { $null }) `
+            -PlanRequestedDisplaySync $planRequestedDisplaySync `
+            -VideoSync ([string]$videoSyncText) `
+            -Interpolation ([string]$metrics['Interpolation']) `
+            -VsyncJitter (As-Number $jitter) `
+            -JitterThreshold $MotionGuardJitterThreshold
+        $metrics['PlanRequestedDisplaySync'] = $planRequestedDisplaySync
+        $metrics['MotionGuardEngaged'] = $verdict.GuardEngaged
+        switch ($verdict.Kind) {
+            'fail'    { Add-Item $fail $verdict.Message }
+            'unknown' { Add-Item $unknown $verdict.Message }
+            'guard'   { Add-Item $notes $verdict.Message }
+        }
         $mpvHz = As-Number $fps
         if ($null -eq $mpvHz -or $mpvHz -le 0) { Add-Item $fail 'mpv did not report a positive display refresh rate.' }
 
@@ -558,8 +662,6 @@ function Invoke-HardwareGate {
         $eFrame = Get-IpcProperty $reader $writer 'frame-drop-count'
         $eDecode = Get-IpcProperty $reader $writer 'decoder-frame-drop-count'
         $eDelay = Get-IpcProperty $reader $writer 'vo-delayed-frame-count'
-
-        $metrics['VsyncJitter'] = As-Number (Get-IpcProperty $reader $writer 'vsync-jitter')
 
         # Hard release gates: a frame the player actually failed to present or decode.
         foreach ($c in @(
