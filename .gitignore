@@ -1,0 +1,7 @@
+adaptive-media/.artifacts/
+**/bin/
+**/obj/
+adaptive-media/source/build/
+adaptive-media/source/dist/
+*.generated.iss
+.superpowers/

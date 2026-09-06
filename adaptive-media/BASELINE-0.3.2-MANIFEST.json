@@ -1,0 +1,188 @@
+﻿{
+    "baseline":  "0.3.2",
+    "archiveSha256":  "F3FC086996BEF6E1A41E9DEA952BEB4305A61C8456F04D4FEC0DCE63AAC88C0B",
+    "patchOrder":  [
+                       "Apply-Stable-Hotfix.ps1",
+                       "Apply-0.3.1-Hotfix.ps1",
+                       "Apply-0.3.2-Dev.ps1",
+                       "Apply-0.3.2-Dev3.ps1",
+                       "Apply-0.3.2-Dev4.ps1",
+                       "Apply-0.3.2-Dev5.ps1",
+                       "Apply-0.3.2-Dev6.ps1",
+                       "Apply-0.3.2-Dev7.ps1",
+                       "Apply-0.3.2-Final.ps1"
+                   ],
+    "inputs":  [
+                   {
+                       "path":  "Apply-Stable-Hotfix.ps1",
+                       "sha256":  "6805B864BF15976ABD530185A84BDF7E8C343BBD6700D88F5E957EFF4DBF02C0"
+                   },
+                   {
+                       "path":  "Apply-0.3.1-Hotfix.ps1",
+                       "sha256":  "E54A54954C27D5A75CC9F761C3D0FB2B59ED1CE9994E28F51E36C8F9B013C0ED"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev.ps1",
+                       "sha256":  "272E7263249215EE8294348B702C77B73174F51CE6BF4455BF1EB6E3BCC90C19"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev3.ps1",
+                       "sha256":  "C574F6BA2D2AE7D3C777EBBBC6460F70BD29E1891548E6C8CEFE182BB441CF6E"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev4.ps1",
+                       "sha256":  "650AF0BE3F6526737FD9FD711A9FAB9278055F9A8650F7BE5A4B5696F4A3B6E9"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev5.ps1",
+                       "sha256":  "CBD030938D5B98EB88538E682BEF3343619656A893E0F68F7080763FB4B42E91"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev6.ps1",
+                       "sha256":  "6F0A661272485FA9E81C9FDAFC76AB7F2C802C5B9A5FA4B1DC06ACE2F3D4B2C8"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Dev7.ps1",
+                       "sha256":  "F54E75A082F5918A25BD1E8147C694230DB432AB5019FFA63990BC3A372FA274"
+                   },
+                   {
+                       "path":  "Apply-0.3.2-Final.ps1",
+                       "sha256":  "ABF974E73ADA1E38604C0911364ED456F823EC0284279AAF14BF65BC7463D908"
+                   },
+                   {
+                       "path":  "Test-0.3.2-Hardware.ps1",
+                       "sha256":  "7ECA5711EFF25EF37234AA8D8B94E88D9A4FFE4453468D6BDB89163902D8433A"
+                   },
+                   {
+                       "path":  "Test-0.3.2-Hardware.cmd",
+                       "sha256":  "70359F7F5144A8885940865F9DD3E63BC16AD97F79ADBD4DBC7C90EBF8147A23"
+                   }
+               ],
+    "files":  [
+                  {
+                      "path":  "installer/AdaptiveMedia.iss",
+                      "sha256":  "6DCA9719C754A39B7CFC0D3F37A1C9B2989E11D1A1FEF6BF058BEBC7F34A2967",
+                      "bytes":  4715
+                  },
+                  {
+                      "path":  "payload/AdaptiveMedia.Engine.ps1",
+                      "sha256":  "4C946126A78AB1DC394D7B98356B8C9D70D363CF46B925F6701DEA00CCA8EF51",
+                      "bytes":  61021
+                  },
+                  {
+                      "path":  "payload/AdaptiveMedia.ico",
+                      "sha256":  "1EEB7A419D995F5EBFF7A4C6921A56E25862DC5B9DC5B39837050E39316400BD",
+                      "bytes":  16915
+                  },
+                  {
+                      "path":  "payload/certification/Test-0.3.2-Hardware.cmd",
+                      "sha256":  "70359F7F5144A8885940865F9DD3E63BC16AD97F79ADBD4DBC7C90EBF8147A23",
+                      "bytes":  945
+                  },
+                  {
+                      "path":  "payload/certification/Test-0.3.2-Hardware.ps1",
+                      "sha256":  "7ECA5711EFF25EF37234AA8D8B94E88D9A4FFE4453468D6BDB89163902D8433A",
+                      "bytes":  43549
+                  },
+                  {
+                      "path":  "payload/mpv-config/input.conf",
+                      "sha256":  "8FF56EABB9C27F737900295258C41BA9D8E487CB1A75ACA29C81BD35A8220716",
+                      "bytes":  184
+                  },
+                  {
+                      "path":  "payload/mpv-config/mpv.conf",
+                      "sha256":  "38A78A15502E60A440052B3E305CFFDD32136A30BEB112855A8D8E5C6CC8E476",
+                      "bytes":  1734
+                  },
+                  {
+                      "path":  "payload/Provision-Dependencies.ps1",
+                      "sha256":  "F8B54E2918CB08EABA4CD4C0EEE5C8C8CF06B801FAE069A9221323FA8B2A4E46",
+                      "bytes":  3830
+                  },
+                  {
+                      "path":  "README.md",
+                      "sha256":  "952AD64DB96025F5C3BF01E0C0D69BB1DF6BCD3F7251390345CA670D28B9A983",
+                      "bytes":  2515
+                  },
+                  {
+                      "path":  "scripts/Build-Dev.ps1",
+                      "sha256":  "43038E9AD2CF8D78CDAB3D1BFC30A828396446FB5DB90DEC3F3EDC1B83C19CEC",
+                      "bytes":  9058
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/AdaptiveMedia.App.csproj",
+                      "sha256":  "1CA15AD6090A62BEB59D114E46BB6DEC100A0C528E023618EE6ED80DA6F064D1",
+                      "bytes":  1103
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/app.manifest",
+                      "sha256":  "3320D100B3319B17A8A8DEA8A73850175AAAFFBE3295F9CA52BB60E3305B38B7",
+                      "bytes":  1052
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/App.xaml",
+                      "sha256":  "46A709785D1EC6F3CDCC82CBB3B385596E046F9C695D52527039E11F9674DA23",
+                      "bytes":  1727
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/App.xaml.cs",
+                      "sha256":  "457C9C5855F96D5F86E8DAB30F2C7272324AC4CFB5AC173AF96EAED470745449",
+                      "bytes":  92
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/Assets/AdaptiveMedia.ico",
+                      "sha256":  "6B0ABE05CFB78F97F62B5CA87C49B641C5B213ABBC4A740F5B227E776E5A7E68",
+                      "bytes":  13344
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/BackendBridge.cs",
+                      "sha256":  "EE4F514B47DD8794CE0461C554D7A4442D79E38040AD48FC4F7A9F50F9C47CCD",
+                      "bytes":  5402
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/MainWindow.xaml",
+                      "sha256":  "84B3B7C0E7421C3D71AF0D086E340BB765E6A1AC1F67D1848C378C6304C41315",
+                      "bytes":  10412
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/MainWindow.xaml.cs",
+                      "sha256":  "6A6AA39AD5E10826B444F54A79975BA9BE43AAB9E292DCD4D98CE59212DE05F4",
+                      "bytes":  6524
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/Models.cs",
+                      "sha256":  "E85290DD99CB05599A45931D110585AFF4712636EC04F2B328E3C4727584A0DF",
+                      "bytes":  1698
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/Program.cs",
+                      "sha256":  "49B0B0F8B8277B4A795337FC11146127F676F5BE6B6180510AA5F447B489769E",
+                      "bytes":  6137
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/SettingsStore.cs",
+                      "sha256":  "D90AA5F8648B03E1E90A3C6C3A45F4792B96F6FB67B9998C5E7A7917F9D315ED",
+                      "bytes":  1407
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/SettingsWindow.xaml",
+                      "sha256":  "934234693C9E2112144582080B0E13142EF7FAA74D802C165DBA04874EC0DC5C",
+                      "bytes":  2020
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/SettingsWindow.xaml.cs",
+                      "sha256":  "D4588974951BD5FFBC6A703BE134616BB2CC344355A342B6DAFEE1F8172D2EC4",
+                      "bytes":  1047
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/UrlDialog.xaml",
+                      "sha256":  "05D21F59A380432F521723B4AE7739A4A81A1E23576335210C926490BAF12477",
+                      "bytes":  1931
+                  },
+                  {
+                      "path":  "src/AdaptiveMedia.App/UrlDialog.xaml.cs",
+                      "sha256":  "CE41B70D0974F0A3779B3035F6719CF8549FB809149379EE70FD6288BBBC7C56",
+                      "bytes":  1092
+                  }
+              ]
+}
