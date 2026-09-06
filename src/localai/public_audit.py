@@ -54,7 +54,9 @@ def collect_public_audit_report(
         ]
 
     origin = get_github_origin_repo()
-    patterns = build_patterns(extra_patterns, owner=origin[0] if origin else None)
+    patterns, unavailable = build_patterns(
+        extra_patterns, owner=origin[0] if origin else None
+    )
     findings = scan_files(tracked, patterns)
     findings, allowed_self_refs = partition_self_references(findings, origin)
 
@@ -63,6 +65,10 @@ def collect_public_audit_report(
     lines.append(
         format_status_line("OK", "tracked files", f"{len(tracked)} files scanned")
     )
+    # Say what could NOT be checked. A clean result from a run that silently
+    # skipped half its patterns is worse than no result at all.
+    for skipped in unavailable:
+        lines.append(format_status_line("SKIP", "pattern unavailable", skipped))
     if allowed_self_refs:
         lines.append(
             format_status_line(
@@ -117,24 +123,57 @@ def format_status_line(level: str, name: str, detail: str) -> str:
     return f"[{level}] {name:<22} {detail}"
 
 
+# Home-directory names that are generic examples or Windows' own accounts, not a
+# leaked identity. Kept deliberately short: any other real home directory in a
+# public repository belongs to somebody's actual machine.
+PLACEHOLDER_USER_NAMES = frozenset(
+    {
+        "example",
+        "user",
+        "username",
+        "you",
+        "youruser",
+        "yourname",
+        "public",
+        "default",
+        "defaultuser",
+        "all users",
+    }
+)
+
+
 def build_patterns(
     extra_patterns: tuple[str, ...] = (),
     *,
     owner: str | None = None,
-) -> list[AuditPattern]:
-    username = os.environ.get("USERNAME", "")
-    computer_name = os.environ.get("COMPUTERNAME", "")
+) -> tuple[list[AuditPattern], list[str]]:
+    """Build the marker patterns, plus the names of any that cannot be checked.
+
+    Identity-derived patterns come from the environment, and those variables do
+    not exist off Windows. Interpolating an empty value used to produce
+    match-everything regexes -- ``\\b\\b`` for the computer name -- so on Linux
+    or macOS the audit flagged essentially every line of the repository and
+    ``--strict`` could never pass. Missing identity now DISABLES its pattern and
+    is reported, rather than silently becoming either a match-all or a
+    match-nothing.
+    """
+    username = os.environ.get("USERNAME", "").strip()
+    computer_name = os.environ.get("COMPUTERNAME", "").strip()
     # Use \s+ (not a literal space) so this definition line does not match
     # itself when the audit scans its own source. Still catches the reference
     # GPU phrasing in user-facing docs.
     hardware_pattern = r"RTX\s*4080|laptop\s+GPU"
 
     patterns = [
+        # Username-independent, so it still works in a portable CI environment:
+        # a public repository should not carry ANY real Windows home directory,
+        # not merely the one belonging to whoever runs the audit. The captured
+        # name excludes whitespace so that prose mentioning the path shape does
+        # not read as a hit (and so this file does not match itself).
         AuditPattern(
-            "Windows user path",
-            rf"C:\\Users\\{re.escape(username)}|Users/{re.escape(username)}",
+            "Windows user home path",
+            r"[Cc]:[\\/]Users[\\/](?P<home>[^\\/\s\"'`,;:)\]}]+)",
         ),
-        AuditPattern("Computer name", rf"\b{re.escape(computer_name)}\b"),
         AuditPattern("Tailnet URL", r"\b[a-z0-9-]+\.tail[0-9a-f]+\.ts\.net\b"),
         AuditPattern(
             "Tailscale IPv4",
@@ -148,13 +187,36 @@ def build_patterns(
         AuditPattern("Laptop hardware", hardware_pattern),
     ]
 
+    unavailable: list[str] = []
+    if username:
+        patterns.append(
+            AuditPattern("Windows user name", rf"\b{re.escape(username)}\b")
+        )
+    else:
+        unavailable.append("Windows user name (no USERNAME in this environment)")
+
+    if computer_name:
+        patterns.append(
+            AuditPattern("Computer name", rf"\b{re.escape(computer_name)}\b")
+        )
+    else:
+        unavailable.append("Computer name (no COMPUTERNAME in this environment)")
+
     if owner:
         patterns.append(AuditPattern("Origin GitHub owner", rf"\b{re.escape(owner)}\b"))
+    else:
+        unavailable.append("Origin GitHub owner (no git origin resolved)")
 
     for pattern in extra_patterns:
         if pattern:
             patterns.append(AuditPattern("Extra pattern", pattern))
-    return patterns
+    return patterns, unavailable
+
+
+def is_placeholder_home(text: str) -> bool:
+    """True when a C:\\Users\\<name> hit is a documentation placeholder."""
+    name = text.strip().strip("<>%").strip()
+    return name.lower() in PLACEHOLDER_USER_NAMES
 
 
 def get_github_origin_repo() -> tuple[str, str] | None:
@@ -176,21 +238,31 @@ def partition_self_references(
 
     A public repo legitimately names its own origin (release URLs, bootstrap
     source, LICENSE copyright holder); only bare owner mentions elsewhere leak.
+
+    The project's own website counts as a self-reference too. It is deployed to
+    Cloudflare Workers, whose hostnames embed the account name as a subdomain
+    (``<project>.<owner>.workers.dev``) rather than as an ``owner/repo`` path,
+    so the URL that README and SUPPORT.md must print to send a customer to the
+    download page was being reported as a private marker.
     """
     if origin is None:
         return findings, 0
     owner, repo = origin
     self_ref = re.compile(rf"\b{re.escape(owner)}/{re.escape(repo)}(?![\w-])")
+    # Deliberately anchored to workers.dev: this allows the project's own
+    # deployment host, not any string that happens to contain the owner name.
+    self_site = re.compile(rf"\b[\w-]+\.{re.escape(owner)}\.workers\.dev\b")
     copyright_line = re.compile(r"^Copyright\b")
     kept: list[Finding] = []
     allowed = 0
     for finding in findings:
         if finding.kind == "Origin GitHub owner":
             is_self_url = bool(self_ref.search(finding.text))
+            is_self_site = bool(self_site.search(finding.text))
             is_license_copyright = finding.file == "LICENSE" and bool(
                 copyright_line.match(finding.text)
             )
-            if is_self_url or is_license_copyright:
+            if is_self_url or is_self_site or is_license_copyright:
                 allowed += 1
                 continue
         kept.append(finding)
@@ -227,8 +299,15 @@ def scan_text(
     for line_number, line in enumerate(text.splitlines(), start=1):
         normalized = re.sub(r"\s+", " ", line.strip())
         for name, pattern in compiled_patterns:
-            if pattern.search(line):
-                findings.append(Finding(name, display_path, line_number, normalized))
+            match = pattern.search(line)
+            if match is None:
+                continue
+            # C:\Users\example\... in documentation is a placeholder, not a
+            # leaked identity; only a real home directory name is a finding.
+            home = match.groupdict().get("home") if match.groupdict() else None
+            if home is not None and is_placeholder_home(home):
+                continue
+            findings.append(Finding(name, display_path, line_number, normalized))
     return findings
 
 
