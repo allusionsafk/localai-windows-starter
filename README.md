@@ -39,6 +39,13 @@ and choose **Download AFK AI for Windows**.
 The website serves a pinned Friend Beta installer only after verifying its
 SHA-256. It does not use GitHub `releases/latest` as the download source.
 
+> [!NOTE]
+> This repository's GitHub **Releases** page also contains Adaptive Media
+> installer artefacts from separate media-tooling work. Those release names and
+> version numbers are not AFK AI versions. For AFK AI, the website pin and
+> [`docs/releases/0.1.7rc1.md`](docs/releases/0.1.7rc1.md) are the authoritative
+> Friend Beta references.
+
 The pinned repository blob remains named **`Install Local AI.cmd`** for source
 and compatibility continuity. The website verifies those exact bytes and saves
 them to the browser as **`Install AFK AI.cmd`**, which is the customer-facing
@@ -160,12 +167,21 @@ CPU-only machines can use smaller models. Expect much slower generation.
 
 ## PowerShell bootstrap
 
-If you prefer to inspect and launch the bootstrap directly:
+If you prefer to inspect and launch the current bootstrap directly:
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1 -OutFile "$env:TEMP\localai-bootstrap.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:TEMP\localai-bootstrap.ps1"
 ```
+
+> [!IMPORTANT]
+> The command above fetches `bootstrap.ps1` from the mutable `master` branch. It
+> is therefore **not equivalent to the website's pinned Friend Beta download**.
+> The bootstrap verifies the repository payload it subsequently downloads
+> against its expected commit/archive hash, but this first bootstrap fetch is
+> not independently pinned by that command. Use the website download when you
+> want the published Friend Beta trust boundary rather than the current-source
+> bootstrap path.
 
 From an existing checkout:
 
@@ -177,8 +193,8 @@ pwsh -ExecutionPolicy Bypass -File installer\bootstrap.ps1
 powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1
 ```
 
-The bootstrap is pinned and fail-closed. It verifies the payload against the
-expected tag commit or source archive hash before running it.
+When run, the bootstrap verifies the downstream repository payload against the
+expected tag commit or source archive hash before executing that payload.
 
 The `-ExecutionPolicy Bypass` shown here applies to this process invocation. It
 does not permanently change the user's PowerShell execution policy.
