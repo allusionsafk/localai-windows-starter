@@ -234,21 +234,25 @@ def partition_self_references(
     findings: list[Finding],
     origin: tuple[str, str] | None,
 ) -> tuple[list[Finding], int]:
-    """Drop 'Origin GitHub owner' hits that reference the origin repo itself.
+    """Drop owner hits that are approved public project self-references.
 
     A public repo legitimately names its own origin (release URLs, bootstrap
-    source, LICENSE copyright holder); only bare owner mentions elsewhere leak.
+    source, LICENSE copyright holder) and its dedicated public website repo.
+    Only those exact project surfaces are exempt; arbitrary repositories owned by
+    the same account still count as leaks.
 
-    The project's own website counts as a self-reference too. It is deployed to
-    Cloudflare Workers, whose hostnames embed the account name as a subdomain
-    (``<project>.<owner>.workers.dev``) rather than as an ``owner/repo`` path,
-    so the URL that README and SUPPORT.md must print to send a customer to the
-    download page was being reported as a private marker.
+    The project's own website hostname counts as a self-reference too. It is
+    deployed to Cloudflare Workers, whose hostnames embed the account name as a
+    subdomain (``<project>.<owner>.workers.dev``) rather than as an ``owner/repo``
+    path.
     """
     if origin is None:
         return findings, 0
     owner, repo = origin
     self_ref = re.compile(rf"\b{re.escape(owner)}/{re.escape(repo)}(?![\w-])")
+    companion_site_repo = re.compile(
+        rf"\b{re.escape(owner)}/{re.escape(repo)}-site(?![\w-])"
+    )
     # Deliberately anchored to workers.dev: this allows the project's own
     # deployment host, not any string that happens to contain the owner name.
     self_site = re.compile(rf"\b[\w-]+\.{re.escape(owner)}\.workers\.dev\b")
@@ -258,11 +262,17 @@ def partition_self_references(
     for finding in findings:
         if finding.kind == "Origin GitHub owner":
             is_self_url = bool(self_ref.search(finding.text))
+            is_companion_site_repo = bool(companion_site_repo.search(finding.text))
             is_self_site = bool(self_site.search(finding.text))
             is_license_copyright = finding.file == "LICENSE" and bool(
                 copyright_line.match(finding.text)
             )
-            if is_self_url or is_self_site or is_license_copyright:
+            if (
+                is_self_url
+                or is_companion_site_repo
+                or is_self_site
+                or is_license_copyright
+            ):
                 allowed += 1
                 continue
         kept.append(finding)
