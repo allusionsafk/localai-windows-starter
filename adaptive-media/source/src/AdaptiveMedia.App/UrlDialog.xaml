@@ -1,0 +1,30 @@
+<Window x:Class="AdaptiveMedia.UrlDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Open URL / stream" Width="620" Height="300" ResizeMode="NoResize" WindowStartupLocation="CenterOwner" Background="#F4F6F9">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock Text="Network media" FontSize="22" FontWeight="SemiBold"/>
+        <TextBlock Grid.Row="1" Text="Direct media URLs and yt-dlp-supported web pages are accepted." Foreground="#667085" Margin="0,4,0,14"/>
+        <TextBox x:Name="UrlBox" Grid.Row="2" FontSize="14" Padding="9"/>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0">
+            <TextBlock Text="Quality" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,12,0"/>
+            <ComboBox x:Name="QualityBox" Width="220" SelectedIndex="0">
+                <ComboBoxItem Content="Best available" Tag="bestvideo+bestaudio/best"/>
+                <ComboBoxItem Content="Up to 4K" Tag="bestvideo[height&lt;=2160]+bestaudio/best[height&lt;=2160]"/>
+                <ComboBoxItem Content="Up to 1440p" Tag="bestvideo[height&lt;=1440]+bestaudio/best[height&lt;=1440]"/>
+                <ComboBoxItem Content="Up to 1080p" Tag="bestvideo[height&lt;=1080]+bestaudio/best[height&lt;=1080]"/>
+            </ComboBox>
+        </StackPanel>
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" IsCancel="True" Margin="0,0,10,0"/>
+            <Button Content="Play" IsDefault="True" Click="Play_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

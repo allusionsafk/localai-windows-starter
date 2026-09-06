@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <InformationalVersion>0.4.0-rc1</InformationalVersion>
+    <FileVersion>0.4.0.0</FileVersion>
+    <AssemblyVersion>0.4.0.0</AssemblyVersion>
+    <Company>Adaptive Media</Company>
+    <Description>Reference-first adaptive media playback with optional per-video enhancements.</Description>
+    <AssemblyTitle>Adaptive Media</AssemblyTitle>
+    <Product>Adaptive Media</Product>
+    <ApplicationIcon>Assets\AdaptiveMedia.ico</ApplicationIcon>
+    <StartupObject>AdaptiveMedia.Program</StartupObject>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>AdaptiveMedia</AssemblyName>
+    <RootNamespace>AdaptiveMedia</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+</Project>

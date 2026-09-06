@@ -5,3 +5,4 @@ adaptive-media/source/build/
 adaptive-media/source/dist/
 *.generated.iss
 .superpowers/
+.tmp/
