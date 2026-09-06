@@ -33,6 +33,19 @@ def test_origin_url_self_reference_is_allowed() -> None:
     assert allowed == 1
 
 
+def test_public_companion_site_repo_is_allowed() -> None:
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            ".github/ISSUE_TEMPLATE/config.yml",
+            f"https://github.com/{OWNER}/localai-windows-starter-site/issues/new/choose",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert kept == []
+    assert allowed == 1
+
+
 def test_license_copyright_is_allowed() -> None:
     findings = [
         make_finding(
@@ -72,6 +85,19 @@ def test_other_repo_of_same_owner_is_not_a_self_reference() -> None:
             "Origin GitHub owner",
             "docs/notes.md",
             f"see github.com/{OWNER}/localai for the private stack",
+        )
+    ]
+    kept, allowed = partition_self_references(findings, ORIGIN)
+    assert len(kept) == 1
+    assert allowed == 0
+
+
+def test_similar_sibling_repo_name_is_not_allowed() -> None:
+    findings = [
+        make_finding(
+            "Origin GitHub owner",
+            "docs/notes.md",
+            f"see github.com/{OWNER}/localai-windows-starter-site-backup",
         )
     ]
     kept, allowed = partition_self_references(findings, ORIGIN)
