@@ -23,7 +23,9 @@ param(
   [switch]$AcceptDefaults,
   [switch]$Resume,
   [switch]$DryRun,
-  [string]$DataRoot = (Join-Path $env:LOCALAPPDATA 'AFK LocalAI\State')
+  [string]$DataRoot = (Join-Path $env:LOCALAPPDATA 'AFK LocalAI\State'),
+  [switch]$EventStream,
+  [string]$LegacyInstallRoot = (Join-Path $env:USERPROFILE 'localai')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,12 +35,15 @@ $RepoRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
 . (Join-Path $RepoRoot 'ai-common.ps1')
 . (Join-Path $PSScriptRoot 'installer-common.ps1')
 . (Join-Path $PSScriptRoot 'preflight.ps1')
+Set-InstallerEventStream -Enabled ([bool]$EventStream)
 
 $DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
+$LegacyInstallRoot = [System.IO.Path]::GetFullPath($LegacyInstallRoot)
 $StatePath = Get-InstallerStatePath -Root $DataRoot
 $TiersPath = Join-Path $PSScriptRoot 'tiers.json'
 $Tiers = Get-Content -LiteralPath $TiersPath -Raw | ConvertFrom-Json
 $State = Import-InstallerState -Path $StatePath
+$State.legacy_install = [pscustomobject]@{ detected = [bool](Test-Path -LiteralPath $LegacyInstallRoot -PathType Container) }
 if (-not $Resume) { $State.pending_reboot = [pscustomobject]@{ required = $false; reason = $null } }
 
 # Canonical intent ids (audit finding 14: one id, display labels map to it).
@@ -130,6 +135,8 @@ function Stop-ForUserAction {
     [string]$RebootReason
   )
   Write-Card $Title $Lines
+  Write-InstallerEvent -EventType 'checkpoint' -Phase 'environment-preflight' `
+    -Status 'action-required' -Code 'checkpoint' -Message ($Lines -join ' ')
   if ($Checkpoint) { $State.preflight = $Checkpoint }
   if ($RebootReason) {
     $State.pending_reboot = [pscustomobject]@{ required = $true; reason = $RebootReason }
@@ -597,8 +604,18 @@ foreach ($phase in $Phases) {
   # A planned pause exits from inside the phase via Stop-ForUserAction; anything
   # that returns here completed, so record it. Safety-critical phases are never
   # recorded (Set-PhaseDone drops them) and so always re-run.
-  & $phase.Run | Out-Null
-  Set-PhaseDone -State $State -Phase $phase.Name -Path $StatePath
+  Write-InstallerEvent -EventType 'phase-start' -Phase $phase.Name -Status 'running' `
+    -Code 'phase-start' -Message "Starting $($phase.Name)."
+  try {
+    & $phase.Run | Out-Null
+    Set-PhaseDone -State $State -Phase $phase.Name -Path $StatePath
+    Write-InstallerEvent -EventType 'phase-success' -Phase $phase.Name -Status 'success' `
+      -Code 'phase-success' -Message "Completed $($phase.Name)."
+  } catch {
+    Write-InstallerEvent -EventType 'phase-failure' -Phase $phase.Name -Status 'failure' `
+      -Code 'phase-failure' -Message $_.Exception.Message
+    throw
+  }
 }
 
 Save-InstallerState -State $State -Path $StatePath

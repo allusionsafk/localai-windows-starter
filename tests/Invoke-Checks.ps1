@@ -124,6 +124,19 @@ if (Test-Path -LiteralPath $preflightTests) {
     Add-Result 'Installer preflight tests' $true 'SKIPPED (Test-InstallerPreflight.ps1 not in this checkout)'
 }
 
+# 6c. Bounded prerequisite recovery mapping, state, and event protocol.
+$recoveryTests = Join-Path $PSScriptRoot 'Test-InstallerRecovery.ps1'
+if (Test-Path -LiteralPath $recoveryTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $recoveryOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $recoveryTests 2>&1
+    $recoveryOk = ($LASTEXITCODE -eq 0)
+    $recoveryLines = @($recoveryOut | ForEach-Object { "$_" })
+    $recoverySummary = @($recoveryLines | Where-Object { $_ -match 'RECOVERY TESTS' } | Select-Object -First 1)
+    $recoveryDetail = if ($recoverySummary) { "$($recoverySummary[0])".Trim() } else { ($recoveryLines | Select-Object -Last 1) }
+    if (-not $recoveryOk) { $recoveryDetail = (@($recoveryLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer recovery tests' $recoveryOk $recoveryDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.

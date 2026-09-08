@@ -34,6 +34,8 @@ function New-InstallerState {
     intent         = @()
     models         = [pscustomobject]@{}
     preflight      = $null
+    recovery       = $null
+    legacy_install = [pscustomobject]@{ detected = $false }
     pending_reboot = [pscustomobject]@{ required = $false; reason = $null }
   }
 }
@@ -43,7 +45,7 @@ function ConvertTo-CurrentInstallerState {
   # that is still meaningful, and never invent readiness that was not recorded.
   param([Parameter(Mandatory)]$Raw)
   $state = New-InstallerState
-  foreach ($name in @('phases_done', 'hardware', 'intent', 'models', 'preflight')) {
+  foreach ($name in @('phases_done', 'hardware', 'intent', 'models', 'preflight', 'recovery', 'legacy_install')) {
     $prop = $Raw.PSObject.Properties[$name]
     if ($prop -and $null -ne $prop.Value) { $state.$name = $prop.Value }
   }
@@ -177,6 +179,40 @@ function Save-InstallerState {
     Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
     throw
   }
+}
+
+# ------------------------------------------------------- structured event stream
+
+$script:InstallerEventStreamEnabled = $false
+
+function Set-InstallerEventStream {
+  param([bool]$Enabled)
+  $script:InstallerEventStreamEnabled = $Enabled
+}
+
+function Write-InstallerEvent {
+  <# Emit one versioned line for the native AFK LocalAI shell. #>
+  param(
+    [Parameter(Mandatory)][string]$EventType,
+    [Parameter(Mandatory)][string]$Phase,
+    [string]$Status = '',
+    [string]$Code = '',
+    [string]$Message = '',
+    $Data = $null,
+    [switch]$Enabled
+  )
+  if (-not ($Enabled -or $script:InstallerEventStreamEnabled)) { return }
+  $payload = [ordered]@{
+    schema_version = 1
+    timestamp_utc = [DateTime]::UtcNow.ToString('o')
+    event_type = $EventType
+    phase = $Phase
+    status = $Status
+    code = $Code
+    message = $Message
+  }
+  if ($null -ne $Data) { $payload.data = $Data }
+  Write-Output ('AFK-EVENT:' + ($payload | ConvertTo-Json -Depth 8 -Compress))
 }
 
 function Test-PreflightCheckpointIsProof {
