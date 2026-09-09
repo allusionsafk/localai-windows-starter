@@ -99,6 +99,28 @@ try
     Check("preflight uses inbox Windows PowerShell", controller.Preflight().FileName.Equals("powershell.exe", StringComparison.OrdinalIgnoreCase));
     Check("preflight requests JSON", controller.Preflight().Arguments.Contains("-Json"));
     Check("provision requests event stream", controller.Provision().Arguments.Contains("-EventStream"));
+
+    var options = CommandLineOptions.Parse(new[] { "--self-test", "--data-root", dataRoot });
+    Check("self-test option parses", options.SelfTest);
+    Check("data-root option parses", options.DataRoot == Path.GetFullPath(dataRoot), options.DataRoot ?? "null");
+    Throws<ArgumentException>("unknown command-line option fails closed", () => CommandLineOptions.Parse(new[] { "--mystery" }));
+
+    Check("fresh state opens setup mode", AppModeResolver.Resolve(new ProvisioningState()) == AppMode.Setup);
+    Check("usable state opens home mode", AppModeResolver.Resolve(new ProvisioningState { Usable = true }) == AppMode.Home);
+    Check("single-instance mutex is version-independent", AppIdentity.SingleInstanceMutexName == "Local\\AFKLocalAI-8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0");
+
+    using var icon = AppIcon.Create();
+    Check("application icon is available", icon.Width >= 32 && icon.Height >= 32, $"{icon.Width}x{icon.Height}");
+    Check("shell exposes accessible setup labels", MainForm.AccessibilityContract.Contains("Prerequisite status") &&
+        MainForm.AccessibilityContract.Contains("Setup progress"));
+    Check("shell uses the hidden process runner", MainForm.ProcessRunnerType == typeof(HiddenProcessRunner));
+
+    Directory.CreateDirectory(Path.Combine(programRoot, "installer"));
+    File.WriteAllText(Path.Combine(programRoot, "installer", "Get-Preflight.ps1"), "# self-test fixture");
+    File.WriteAllText(Path.Combine(programRoot, "installer", "Invoke-Recovery.ps1"), "# self-test fixture");
+    var selfTest = SelfTestRunner.Run(paths, product);
+    Check("shell self-test succeeds", selfTest.Success, string.Join(" | ", selfTest.Checks.Where(pair => !pair.Value).Select(pair => pair.Key)));
+    Check("shell self-test serializes as JSON", selfTest.ToJson().Contains("\"success\":true", StringComparison.Ordinal));
 }
 finally
 {

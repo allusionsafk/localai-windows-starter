@@ -75,8 +75,9 @@ public sealed class PreflightSummary
     [JsonPropertyName("schema_version")] public int SchemaVersion { get; init; }
     [JsonPropertyName("overall")] public string Overall { get; init; } = "";
     [JsonPropertyName("code")] public string Code { get; init; } = "";
-    [JsonPropertyName("action")] public string Action { get; init; } = "";
+    [JsonPropertyName("action")] public string? Action { get; init; }
     [JsonPropertyName("reboot_required")] public bool RebootRequired { get; init; }
     [JsonPropertyName("user_message")] public string[] UserMessage { get; init; } = Array.Empty<string>();
     [JsonPropertyName("diagnostics")] public string[] Diagnostics { get; init; } = Array.Empty<string>();
+    [JsonPropertyName("components")] public Dictionary<string, JsonElement> Components { get; init; } = new();
 }
