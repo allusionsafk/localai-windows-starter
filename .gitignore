@@ -1,4 +1,5 @@
 adaptive-media/.artifacts/
+.artifacts/
 **/bin/
 **/obj/
 adaptive-media/source/build/
