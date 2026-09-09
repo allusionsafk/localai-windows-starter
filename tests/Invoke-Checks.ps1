@@ -163,6 +163,19 @@ if (Test-Path -LiteralPath $lifecycleTests) {
     Add-Result 'Installer lifecycle harness tests' $lifecycleOk $lifecycleDetail
 }
 
+# 6f. Candidate/publish workflows must preserve tested-bits-equal-published-bits.
+$releaseWorkflowTests = Join-Path $PSScriptRoot 'Test-ReleaseWorkflowContracts.ps1'
+if (Test-Path -LiteralPath $releaseWorkflowTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $releaseOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $releaseWorkflowTests 2>&1
+    $releaseOk = ($LASTEXITCODE -eq 0)
+    $releaseLines = @($releaseOut | ForEach-Object { "$_" })
+    $releaseSummary = @($releaseLines | Where-Object { $_ -match 'RELEASE WORKFLOW CONTRACTS' } | Select-Object -First 1)
+    $releaseDetail = if ($releaseSummary) { "$($releaseSummary[0])".Trim() } else { ($releaseLines | Select-Object -Last 1) }
+    if (-not $releaseOk) { $releaseDetail = (@($releaseLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Release workflow contracts' $releaseOk $releaseDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.
