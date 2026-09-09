@@ -117,6 +117,21 @@ try
         }
         Check(noOverwrite && melResult.OutputSha256 == Sha256(melOutput), "Existing destinations are never overwritten");
 
+        string sabotagedOutput = Path.Combine(executionRoot, "sabotaged-output.mkv");
+        bool validationRejectedZeroExit = false;
+        try
+        {
+            var sabotagedExecutor = new DvMatroskaP81Executor(tools, new ConvertedStreamSabotageProcess(runner, doviTool));
+            await sabotagedExecutor.ExecuteAsync(new(mel.SourcePath, sabotagedOutput,
+                DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+        }
+        catch (DvExecutionException)
+        {
+            validationRejectedZeroExit = true;
+        }
+        Check(validationRejectedZeroExit && !File.Exists(sabotagedOutput),
+            "A zero-exit helper result cannot promote output that fails independent validation");
+
         string felHash = Sha256(fel.SourcePath);
         DvExecutionResult felResult = await executor.ExecuteAsync(new(fel.SourcePath, felOutput,
             DvConversionPlanner.Build(fel.Source, DvConversionTarget.Profile81), AcknowledgeFelLoss: true), CancellationToken.None);
@@ -143,4 +158,21 @@ catch (Exception ex)
 {
     Console.Error.WriteLine(ex);
     return 1;
+}
+
+sealed class ConvertedStreamSabotageProcess(IDvToolProcess inner, string doviTool) : IDvToolProcess
+{
+    public async Task<DvToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        DvToolResult result = await inner.RunAsync(executable, arguments, workingDirectory, timeout, cancellationToken);
+        if (result.ExitCode == 0 && Path.GetFullPath(executable) == Path.GetFullPath(doviTool) && arguments.Contains("convert"))
+        {
+            string[] command = arguments.ToArray();
+            int sourceIndex = Array.IndexOf(command, "--discard") + 1;
+            int outputIndex = Array.IndexOf(command, "-o") + 1;
+            File.Copy(command[sourceIndex], command[outputIndex], overwrite: true);
+        }
+        return result;
+    }
 }
