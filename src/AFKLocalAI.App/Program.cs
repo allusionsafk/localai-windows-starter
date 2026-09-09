@@ -21,6 +21,8 @@ public sealed record CommandLineOptions(
     bool Diagnostics = false,
     bool DataFolder = false,
     bool About = false,
+    bool Stop = false,
+    bool Silent = false,
     string? DataRoot = null)
 {
     public static CommandLineOptions Parse(string[] arguments)
@@ -35,6 +37,8 @@ public sealed record CommandLineOptions(
                 "--diagnostics" => result with { Diagnostics = true },
                 "--data-folder" => result with { DataFolder = true },
                 "--about" => result with { About = true },
+                "--stop" => result with { Stop = true },
+                "--silent" => result with { Silent = true },
                 "--data-root" when index + 1 < arguments.Length =>
                     result with { DataRoot = Path.GetFullPath(arguments[++index]) },
                 _ => throw new ArgumentException($"Unknown or incomplete AFK LocalAI option '{argument}'.")
@@ -93,6 +97,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] arguments)
     {
+        var silent = arguments.Contains("--silent", StringComparer.OrdinalIgnoreCase);
         try
         {
             var options = CommandLineOptions.Parse(arguments);
@@ -104,6 +109,11 @@ internal static class Program
                 var summary = SelfTestRunner.Run(paths, product);
                 WriteStandardOutput(summary.ToJson());
                 return summary.Success ? 0 : 1;
+            }
+            if (options.Stop)
+            {
+                var result = new HiddenProcessRunner().RunAsync(new ProvisioningController(paths).Stop()).GetAwaiter().GetResult();
+                return result.ExitCode;
             }
             if (options.Diagnostics || options.DataFolder)
             {
@@ -122,11 +132,12 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            MessageBox.Show(
-                $"AFK LocalAI could not start.\n\n{exception.Message}",
-                "AFK LocalAI",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            if (!silent)
+                MessageBox.Show(
+                    $"AFK LocalAI could not start.\n\n{exception.Message}",
+                    "AFK LocalAI",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             return 1;
         }
     }

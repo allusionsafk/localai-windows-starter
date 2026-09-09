@@ -137,6 +137,19 @@ if (Test-Path -LiteralPath $recoveryTests) {
     Add-Result 'Installer recovery tests' $recoveryOk $recoveryDetail
 }
 
+# 6d. Native installer and deterministic payload contracts.
+$installerTests = Join-Path $PSScriptRoot 'Test-InstallerContracts.ps1'
+if (Test-Path -LiteralPath $installerTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $installerOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $installerTests 2>&1
+    $installerOk = ($LASTEXITCODE -eq 0)
+    $installerLines = @($installerOut | ForEach-Object { "$_" })
+    $installerSummary = @($installerLines | Where-Object { $_ -match 'INSTALLER CONTRACTS' } | Select-Object -First 1)
+    $installerDetail = if ($installerSummary) { "$($installerSummary[0])".Trim() } else { ($installerLines | Select-Object -Last 1) }
+    if (-not $installerOk) { $installerDetail = (@($installerLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer distribution contracts' $installerOk $installerDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.

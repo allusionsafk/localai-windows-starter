@@ -104,6 +104,9 @@ try
     Check("self-test option parses", options.SelfTest);
     Check("data-root option parses", options.DataRoot == Path.GetFullPath(dataRoot), options.DataRoot ?? "null");
     Throws<ArgumentException>("unknown command-line option fails closed", () => CommandLineOptions.Parse(new[] { "--mystery" }));
+    var uninstallOptions = CommandLineOptions.Parse(new[] { "--stop", "--silent" });
+    Check("uninstall stop option parses", uninstallOptions.Stop);
+    Check("silent option parses", uninstallOptions.Silent);
 
     Check("fresh state opens setup mode", AppModeResolver.Resolve(new ProvisioningState()) == AppMode.Setup);
     Check("usable state opens home mode", AppModeResolver.Resolve(new ProvisioningState { Usable = true }) == AppMode.Home);
