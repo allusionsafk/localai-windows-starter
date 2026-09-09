@@ -64,23 +64,28 @@ public sealed class DvEvidenceAdapter
             string enhancement = Path.Combine(work, "source.el.hevc");
             DvToolResult demux = await process.RunAsync(tools.DoviTool,
                 ["demux", "--el-only", elementary, "--el-out", enhancement], work, ToolTimeout, cancellationToken);
-            bool actualEl = demux.ExitCode == 0 && File.Exists(enhancement) && new FileInfo(enhancement).Length > 0;
+            string demuxDiagnostic = Compact(demux.Error + Environment.NewLine + demux.Output);
+            bool explicitNoEl = demux.ExitCode == 1 &&
+                demuxDiagnostic == "Error: No enhancement layer was found in input file" && !File.Exists(enhancement);
+            bool demuxSucceeded = demux.ExitCode == 0 || explicitNoEl;
+            bool actualEl = demuxSucceeded && File.Exists(enhancement) && new FileInfo(enhancement).Length > 0;
 
             bool profileAgreement = probe.DvProfile == summary.Profile && probe.RpuPresent == true;
             bool countAgreement = summary.Frames > 0 && summary.Frames == probe.PacketCount;
-            bool elAgreement = probe.ElPresent == actualEl;
+            bool elAgreement = demuxSucceeded && probe.ElPresent == actualEl;
             DvRpuStatus status = profileAgreement && countAgreement && elAgreement
                 ? DvRpuStatus.Validated : DvRpuStatus.Malformed;
             DvEnhancementLayer layer = summary.Profile switch
             {
-                7 when actualEl && summary.Subprofile == "MEL" => DvEnhancementLayer.Mel,
-                7 when actualEl && summary.Subprofile == "FEL" => DvEnhancementLayer.Fel,
-                8 when !actualEl => DvEnhancementLayer.None,
+                7 when demuxSucceeded && actualEl && summary.Subprofile == "MEL" => DvEnhancementLayer.Mel,
+                7 when demuxSucceeded && actualEl && summary.Subprofile == "FEL" => DvEnhancementLayer.Fel,
+                8 when demuxSucceeded && !actualEl => DvEnhancementLayer.None,
                 _ => DvEnhancementLayer.Unknown
             };
             string evidence = $"mkvmerge JSON + ffprobe configuration/HDR + dovi_tool whole-stream parse: " +
                 $"profile={summary.Profile}, subprofile={summary.Subprofile ?? "none"}, RPUs={summary.Frames}, " +
-                $"packets={probe.PacketCount}, actualEL={actualEl}, HDR10static={probe.StaticHdrMetadata}.";
+                $"packets={probe.PacketCount}, elProbeSucceeded={demuxSucceeded}, actualEL={actualEl}, " +
+                $"HDR10static={probe.StaticHdrMetadata}.";
             var source = new DvSourceInfo(DvDetection.Detected, summary.Profile, probe.CompatibilityId,
                 probe.Media, probe.Hdr10Base, layer, status, probe.BitDepth, evidence);
             return new(sourcePath, source, videoTrack.Id, videoTrack.Uid, summary.Frames,

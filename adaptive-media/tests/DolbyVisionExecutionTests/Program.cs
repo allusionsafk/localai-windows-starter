@@ -79,6 +79,108 @@ try
     try
     {
         var executor = new DvMatroskaP81Executor(tools, runner);
+        var guardedProcess = new RecordingProcess(runner);
+        var guardedExecutor = new DvMatroskaP81Executor(tools, guardedProcess);
+        bool samePathRejected = false;
+        try
+        {
+            await guardedExecutor.ExecuteAsync(new(mel.SourcePath, mel.SourcePath,
+                DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+        }
+        catch (IOException)
+        {
+            samePathRejected = true;
+        }
+        bool wrongPlanRejected = false;
+        try
+        {
+            await guardedExecutor.ExecuteAsync(new(mel.SourcePath, Path.Combine(executionRoot, "wrong-plan.mkv"),
+                DvConversionPlanner.Build(mel.Source, DvConversionTarget.Hdr10), false), CancellationToken.None);
+        }
+        catch (DvExecutionException)
+        {
+            wrongPlanRejected = true;
+        }
+        Check(samePathRejected && wrongPlanRejected && guardedProcess.Invocations == 0,
+            "Path aliases and non-executable plans are rejected before helper launch");
+
+        string notMatroska = Path.Combine(executionRoot, "not-matroska.mkv");
+        File.WriteAllText(notMatroska, "not a Matroska container");
+        bool nonMatroskaRejected = false;
+        try
+        {
+            await adapter.ReadAsync(notMatroska, CancellationToken.None);
+        }
+        catch (DvEvidenceException)
+        {
+            nonMatroskaRejected = true;
+        }
+        Check(nonMatroskaRejected, "Non-Matroska input is rejected by real container evidence");
+
+        string multipleVideo = Path.Combine(executionRoot, "multiple-video.mkv");
+        var multipleArguments = new List<string> { "-o", multipleVideo, "--regenerate-track-uids" };
+        for (int input = 0; input < 2; input++)
+            multipleArguments.AddRange(["--no-audio", "--no-subtitles", "--no-attachments", "--no-chapters",
+                "--no-global-tags", "--no-track-tags", mel.SourcePath]);
+        DvToolResult multipleResult = await runner.RunAsync(tools.MkvMerge, multipleArguments, executionRoot,
+            TimeSpan.FromSeconds(30), CancellationToken.None);
+        bool multipleVideoRejected = false;
+        try
+        {
+            await adapter.ReadAsync(multipleVideo, CancellationToken.None);
+        }
+        catch (DvEvidenceException)
+        {
+            multipleVideoRejected = true;
+        }
+        Check(multipleResult.ExitCode == 0 && multipleVideoRejected,
+            "Matroska sources with multiple video tracks are rejected by real inventory evidence");
+
+        async Task ExpectFailsClosedAsync<TException>(IDvToolProcess failingProcess, string name)
+            where TException : Exception
+        {
+            string failedOutput = Path.Combine(executionRoot, name + ".mkv");
+            string sourceHash = Sha256(mel.SourcePath);
+            bool rejected = false;
+            try
+            {
+                var failingExecutor = new DvMatroskaP81Executor(tools, failingProcess);
+                await failingExecutor.ExecuteAsync(new(mel.SourcePath, failedOutput,
+                    DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+            }
+            catch (TException)
+            {
+                rejected = true;
+            }
+            Check(rejected && !File.Exists(failedOutput) && Sha256(mel.SourcePath) == sourceHash &&
+                !Directory.EnumerateDirectories(executionRoot, ".adaptivemedia-dv-*").Any(),
+                $"{name} preserves source and cleans transaction without promotion");
+        }
+
+        await ExpectFailsClosedAsync<DvExecutionException>(
+            new InterceptProcess(runner, doviTool, "convert", InterceptBehavior.NonZero), "conversion-failure");
+        await ExpectFailsClosedAsync<TimeoutException>(
+            new InterceptProcess(runner, doviTool, "convert", InterceptBehavior.Timeout), "conversion-timeout");
+        await ExpectFailsClosedAsync<OperationCanceledException>(
+            new InterceptProcess(runner, doviTool, "convert", InterceptBehavior.Cancel), "conversion-cancellation");
+        await ExpectFailsClosedAsync<DvExecutionException>(
+            new InterceptProcess(runner, tools.MkvMerge, "-o", InterceptBehavior.NonZero), "remux-failure");
+
+        string mismatchOutput = Path.Combine(executionRoot, "plan-source-mismatch.mkv");
+        bool mismatchRejected = false;
+        try
+        {
+            await executor.ExecuteAsync(new(fel.SourcePath, mismatchOutput,
+                DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+        }
+        catch (DvExecutionException)
+        {
+            mismatchRejected = true;
+        }
+        Check(mismatchRejected && !File.Exists(mismatchOutput) &&
+            !Directory.EnumerateDirectories(executionRoot, ".adaptivemedia-dv-*").Any(),
+            "A plan whose source facts do not match current evidence fails closed");
+
         string felOutput = Path.Combine(executionRoot, "fel-output.mkv");
         bool acknowledgementRequired = false;
         try
@@ -96,7 +198,8 @@ try
         string melOutput = Path.Combine(executionRoot, "mel-output.mkv");
         DvExecutionResult melResult = await executor.ExecuteAsync(new(mel.SourcePath, melOutput,
             DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), AcknowledgeFelLoss: false), CancellationToken.None);
-        Check(melResult.Promoted && File.Exists(melOutput), "Validated MEL output is promoted");
+        Check(melResult.Promoted && melResult.DestinationPath == melOutput && File.Exists(melOutput),
+            "Validated MEL output is promoted to the requested path");
         Check(melResult.SourceSha256Before == melHash && melResult.SourceSha256After == melHash && Sha256(mel.SourcePath) == melHash,
             "MEL source remains byte-for-byte unchanged");
         Check(melResult.Validation is { Profile81: true, RpuValidated: true, EnhancementLayerAbsent: true,
@@ -104,6 +207,11 @@ try
         Check(melResult.Validation is { NonVideoPayloadsIdentical: true, TrackInventoryPreserved: true,
             ChaptersPreserved: true, AttachmentsPreserved: true, MetadataPreserved: true },
             "MEL output preserves supported Matroska content");
+        DvMatroskaEvidence failedElProbe = await new DvEvidenceAdapter(
+            tools, new InterceptProcess(runner, doviTool, "demux", InterceptBehavior.NonZero))
+            .ReadAsync(melOutput, CancellationToken.None);
+        Check(failedElProbe.Source is { Rpu: DvRpuStatus.Malformed, EnhancementLayer: DvEnhancementLayer.Unknown },
+            "A failed enhancement-layer probe cannot be interpreted as validated EL absence");
 
         bool noOverwrite = false;
         try
@@ -131,6 +239,26 @@ try
         }
         Check(validationRejectedZeroExit && !File.Exists(sabotagedOutput),
             "A zero-exit helper result cannot promote output that fails independent validation");
+
+        string mutableSource = Path.Combine(executionRoot, "mutable-source.mkv");
+        File.Copy(mel.SourcePath, mutableSource);
+        DvMatroskaEvidence mutableEvidence = await adapter.ReadAsync(mutableSource, CancellationToken.None);
+        string sourceRaceOutput = Path.Combine(executionRoot, "source-race-output.mkv");
+        bool sourceRaceRejected = false;
+        try
+        {
+            var sourceRaceExecutor = new DvMatroskaP81Executor(tools,
+                new SourceMutationProcess(runner, doviTool, mutableSource, removeInvocation: 3));
+            await sourceRaceExecutor.ExecuteAsync(new(mutableSource, sourceRaceOutput,
+                DvConversionPlanner.Build(mutableEvidence.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+        }
+        catch (DvExecutionException)
+        {
+            sourceRaceRejected = true;
+        }
+        Check(sourceRaceRejected && !File.Exists(sourceRaceOutput) &&
+            !Directory.EnumerateDirectories(executionRoot, ".adaptivemedia-dv-*").Any(),
+            "A source change during the final helper operation is detected before promotion");
 
         string felHash = Sha256(fel.SourcePath);
         DvExecutionResult felResult = await executor.ExecuteAsync(new(fel.SourcePath, felOutput,
@@ -172,6 +300,60 @@ sealed class ConvertedStreamSabotageProcess(IDvToolProcess inner, string doviToo
             int sourceIndex = Array.IndexOf(command, "--discard") + 1;
             int outputIndex = Array.IndexOf(command, "-o") + 1;
             File.Copy(command[sourceIndex], command[outputIndex], overwrite: true);
+        }
+        return result;
+    }
+}
+
+sealed class RecordingProcess(IDvToolProcess inner) : IDvToolProcess
+{
+    public int Invocations { get; private set; }
+
+    public Task<DvToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        Invocations++;
+        return inner.RunAsync(executable, arguments, workingDirectory, timeout, cancellationToken);
+    }
+}
+
+enum InterceptBehavior { NonZero, Timeout, Cancel }
+
+sealed class InterceptProcess(IDvToolProcess inner, string interceptedExecutable, string argument,
+    InterceptBehavior behavior) : IDvToolProcess
+{
+    public Task<DvToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        bool intercept = string.Equals(Path.GetFullPath(executable), Path.GetFullPath(interceptedExecutable),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
+            arguments.Contains(argument);
+        if (!intercept) return inner.RunAsync(executable, arguments, workingDirectory, timeout, cancellationToken);
+        return behavior switch
+        {
+            InterceptBehavior.NonZero => Task.FromResult(new DvToolResult(97, string.Empty, "injected failure")),
+            InterceptBehavior.Timeout => Task.FromException<DvToolResult>(new TimeoutException("injected timeout")),
+            InterceptBehavior.Cancel => Task.FromException<DvToolResult>(new OperationCanceledException("injected cancellation")),
+            _ => throw new ArgumentOutOfRangeException(nameof(behavior))
+        };
+    }
+}
+
+sealed class SourceMutationProcess(IDvToolProcess inner, string doviTool, string sourcePath,
+    int removeInvocation) : IDvToolProcess
+{
+    private int removes;
+
+    public async Task<DvToolResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        string workingDirectory, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        DvToolResult result = await inner.RunAsync(executable, arguments, workingDirectory, timeout, cancellationToken);
+        if (result.ExitCode == 0 && string.Equals(Path.GetFullPath(executable), Path.GetFullPath(doviTool),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
+            arguments.Contains("remove") && ++removes == removeInvocation)
+        {
+            await using FileStream stream = new(sourcePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+            await stream.WriteAsync(new byte[] { 0x00 }, cancellationToken);
         }
         return result;
     }

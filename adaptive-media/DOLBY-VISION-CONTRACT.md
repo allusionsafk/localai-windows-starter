@@ -8,9 +8,10 @@ pure policy entry point. `tests/DolbyVisionTests` is a dependency-free determini
 console suite matching existing repository test conventions.
 
 Source facts reuse `MediaInfo` but do not derive DV from its HDR boolean. Existing
-mpv `MediaProbe` does not classify DV. A future probe must validate the selected
-whole video stream using mature upstream parsers, including RPU validity and EL
-type; a first-frame flag, filename or profile number alone is insufficient.
+mpv `MediaProbe` does not classify DV. `DvEvidenceAdapter` is the execution-grade
+Matroska adapter: it combines `mkvmerge -J`, FFprobe configuration/HDR evidence,
+and a `dovi_tool` whole-stream RPU extraction, summary and EL demux. A first-frame
+flag, filename or profile number alone is insufficient.
 `Hdr10Base.Yes` is an evidence assertion, including compatible color representation
 and HDR signalling, not a conclusion from PQ alone. Unknowns remain unknown.
 
@@ -41,7 +42,9 @@ material; FEL also carries picture reconstruction contribution that is discarded
 - Plans have no public constructor/setters. Derived losses and FEL warning share one construction path.
 - Stream copy cannot report re-encoding or useful GPU acceleration.
 - Pixel processing cannot report base stream copy; acceleration is only potentially useful.
-- `Supported` is policy support. `Executable` is false for EVERY plan until a real executor exists.
+- `Supported` is policy support. `Executable` is true only for supported P7
+  MEL/FEL -> P8.1 plans handled by `DvMatroskaP81Executor`; all other plans remain
+  non-executable.
 - Unsupported plans promise no expected output. Output expectations are not validation evidence.
 - P8.1 output means profile 8 / compatibility ID 1 / RPU / no EL / HDR10 base.
 - HDR10 output means no DV RPU or configuration, no EL, compatible base retained.
@@ -61,27 +64,84 @@ material; FEL also carries picture reconstruction contribution that is discarded
   filters act without decoding; `dovi_rpu` strip removes configuration and RPU.
   Current `dovi_split` documentation describes EL/RPU separation, not P8.1 rewriting.
 
-## Verification and next milestone
+## Evidence and execution boundary
 
-Baseline: existing `dotnet run --project adaptive-media/source/tests` passed 220
-assertions (local named-pipe access required). DV tests were introduced before
-production types, failed for missing types, then passed 58 assertions.
-Run: `dotnet run --project adaptive-media/tests/DolbyVisionTests`.
+The real adapter accepts a supported Matroska container with exactly one video
+track, and that track must be HEVC. It requires agreement between FFprobe's DV
+configuration, an extracted full elementary stream parsed by `dovi_tool`, the RPU
+count and the selected video's packet count, and actual EL demux evidence. HDR10
+base status additionally requires 10-bit 4:2:0 HEVC, PQ, BT.2020 primaries,
+BT.2020 non-constant-luminance matrix, mastering-display metadata, and
+content-light metadata. Disagreement is malformed evidence, never an inferred
+classification.
 
-P7 execution is NOT implemented. Stretch assessment found FFmpeg 7.1-full_build-
-www.gyan.dev on PATH (`dovi_rpu`, no `dovi_split`), no dovi_tool on PATH, no checked-in
-HEVC/MKV conversion fixtures, and no whole-stream DV probe. An elementary-stream
-round trip cannot yet establish container timestamp/stream/attachment preservation
-or independently prove unchanged base picture data. Implementing those pieces is
-larger than a trustworthy stretch; no partial executor is shipped.
+`DvMatroskaP81Executor` accepts only an executable planner-produced P7 -> P8.1
+stream-copy/EL-discard plan. It re-probes immediately and rejects a stale or
+different plan. FEL requires an explicit acknowledgement before any helper runs,
+and the result always carries `FelPictureContributionLost`,
+`P7FelToP81FelDiscarded`, and `FelPictureContributionNotRetained`.
 
-Next for Sol High: add a whole-stream evidence adapter and licensed MEL/FEL fixtures,
-pin an upstream converter, then implement ONE Matroska-only transactional executor.
-Gate it on this planner; validate profile, RPU/EL, base coded-picture identity,
-timestamps, inventory, chapters, tags and flags before atomic no-overwrite promotion.
-Test cancellation/failure cleanup and unchanged source hashes. Keep P5 execution,
-GPU transcoding, playback and WPF redesign out of scope.
+Execution is a same-destination-directory transaction. The source is read-only and
+SHA-256 checked before and after. A pre-existing destination is never overwritten.
+`dovi_tool 2.3.3`/libdovi 3.4.0 performs mode-2 RPU conversion with EL discard;
+MKVToolNix 101.0 remuxes the converted elementary stream and source container
+content. Only a fully validated temporary MKV is atomically moved to the requested
+path, and transaction data is cleaned on success, rejection, cancellation, or
+failure.
 
-Production integration: `dotnet build adaptive-media/source/src/AdaptiveMedia.App/AdaptiveMedia.App.csproj`
-passed with 0 warnings / 0 errors after allowing NuGet restore access.
-`git diff --check` passed. No playback production files were modified.
+Supported preservation is explicit: original track order; all non-video payloads
+and timestamps; video timestamps and exact default duration; track language, name,
+enabled/default/forced/accessibility/original/commentary flags and typed header
+inventory; chapters; attachment identity and bytes; title, date, timestamp scale;
+and global/track tags. The new video TrackUID may differ, so video tags are remapped.
+MKVToolNix-generated statistics (`BPS`, `DURATION`, frame/byte counts and associated
+`_STATISTICS_*` fields) are regenerated container data and are excluded from the
+metadata-identity promise.
+
+Promotion requires independent evidence, not helper exit codes:
+
+- output profile 8, compatibility ID 1, validated RPU count, HDR10 base, and no EL;
+- SHA-256 equality after independently removing DV metadata from both input and
+  output elementary streams, proving the compressed base was not transcoded;
+- byte-identical video timestamps and byte-identical non-video extracted payloads
+  and timestamps;
+- normalized track/header inventory, chapters, attachments and supported metadata;
+- unchanged source SHA-256 and a still-absent destination at promotion time.
+
+Any failed proof leaves no promoted output. A real regression deliberately replaces
+the converted stream after a zero-exit helper result; the validator rejects it.
+
+## Fixtures and tooling
+
+The checked-in 259-frame MEL and FEL Matroska fixtures are reproducible structural
+samples with HDR10 base video, audio, forced subtitle, chapters, attachment and
+tags. Their exact upstream blobs, tool releases, SHA-256 values and licenses are in
+[`tests/DolbyVisionExecutionTests/fixtures/PROVENANCE.md`](tests/DolbyVisionExecutionTests/fixtures/PROVENANCE.md).
+They are not claimed to be authored commercial Dolby Vision masters or subjective
+quality references.
+
+The real gate pins dovi_tool 2.3.3 and MKVToolNix 101.0 under
+`.artifacts/dv-tests`, verifies archive/fixture hashes, and requires FFprobe 7.1 on
+PATH. Fixture reconstruction additionally requires FFmpeg 7.1, Git and an archive
+extractor. Missing real tools are a failure, never a skipped success.
+
+## Verification and remaining scope
+
+Run the semantic and real-media gates with:
+
+```powershell
+dotnet run --project source/tests/AdaptiveMedia.Tests.csproj
+dotnet run --project tests/DolbyVisionTests/DolbyVisionTests.csproj
+pwsh -NoProfile -ExecutionPolicy Bypass -File tests/Run-DolbyVisionExecutionTests.ps1
+```
+
+The established counts are 220 existing assertions, exactly 58 planner/contract
+assertions, and 29 real execution assertions with no skips.
+
+P8.1 -> HDR10 execution, P5/pixel conversion, NVENC/libplacebo GPU conversion,
+Shadow Transcode, installer changes, playback integration, and broad WPF UI remain
+out of scope and non-executable.
+
+Production integration is verified with
+`dotnet build source/src/AdaptiveMedia.App/AdaptiveMedia.App.csproj --no-restore`.
+No playback production files are modified by this milestone.

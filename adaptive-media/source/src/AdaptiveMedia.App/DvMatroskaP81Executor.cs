@@ -24,6 +24,7 @@ public sealed record DvValidationReport(
 
 public sealed record DvExecutionResult(
     bool Promoted,
+    string DestinationPath,
     string SourceSha256Before,
     string SourceSha256After,
     string OutputSha256,
@@ -121,15 +122,15 @@ public sealed class DvMatroskaP81Executor
                 transaction, cancellationToken).ConfigureAwait(false);
             RequireAllValidation(validation);
 
-            string sourceHashAfter = await HashFileAsync(source, cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal))
-                throw new DvExecutionException("The source changed during conversion; the output will not be promoted.");
             string outputHash = await HashFileAsync(temporaryOutput, cancellationToken).ConfigureAwait(false);
             string baseHash = await NormalizedBaseHashAsync(sourceMedia.VideoPayload, "result-base", transaction, cancellationToken)
                 .ConfigureAwait(false);
+            string sourceHashAfter = await HashFileAsync(source, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal))
+                throw new DvExecutionException("The source changed during conversion; the output will not be promoted.");
 
             File.Move(temporaryOutput, destination, overwrite: false);
-            return new(true, sourceHashBefore, sourceHashAfter, outputHash, baseHash,
+            return new(true, destination, sourceHashBefore, sourceHashAfter, outputHash, baseHash,
                 sourceEvidence.Source, outputEvidence.Source, observedPlan.Losses, observedPlan.Codes, validation);
         }
         finally
@@ -247,7 +248,7 @@ public sealed class DvMatroskaP81Executor
 
         bool tracks = InventoriesEqual(sourceEvidence.Inventory, outputEvidence.Inventory, sourceVideoId, outputVideoId);
         bool chapters = sourceEvidence.Inventory.ChapterEntries == outputEvidence.Inventory.ChapterEntries &&
-            (sourceEvidence.Inventory.ChapterEntries == 0 || XmlEqual(source.Chapters, output.Chapters, null, null));
+            (sourceEvidence.Inventory.ChapterEntries == 0 || ChapterXmlEqual(source.Chapters, output.Chapters));
         bool attachmentInventory = sourceEvidence.Inventory.Attachments.SequenceEqual(outputEvidence.Inventory.Attachments);
         bool attachmentPayloads = attachmentInventory;
         foreach (DvAttachmentInventory item in sourceEvidence.Inventory.Attachments)
@@ -267,9 +268,7 @@ public sealed class DvMatroskaP81Executor
         string? detail = metadata ? null : $"metadata(title={title}, date={date}, timestampScale={scale}, tags={tags}; " +
             $"sourceTitle={sourceEvidence.Inventory.Title}, outputTitle={outputEvidence.Inventory.Title}; " +
             $"sourceDate={sourceEvidence.Inventory.DateUtc}, outputDate={outputEvidence.Inventory.DateUtc}; " +
-            $"sourceScale={sourceEvidence.Inventory.TimestampScale}, outputScale={outputEvidence.Inventory.TimestampScale}; " +
-            $"sourceTags={CanonicalTagXml(source.Tags, sourceEvidence.VideoTrackUid)}, " +
-            $"outputTags={CanonicalTagXml(output.Tags, outputEvidence.VideoTrackUid)})";
+            $"sourceScale={sourceEvidence.Inventory.TimestampScale}, outputScale={outputEvidence.Inventory.TimestampScale})";
 
         return new(profile, rpu, noEnhancement,
             string.Equals(sourceBase, outputBase, StringComparison.Ordinal), videoTimestamps,
@@ -320,13 +319,11 @@ public sealed class DvMatroskaP81Executor
         return string.Equals(CanonicalElement(first.Root), CanonicalElement(second.Root), StringComparison.Ordinal);
     }
 
-    private static string CanonicalTagXml(string path, ulong? videoUid)
+    private static bool ChapterXmlEqual(string left, string right)
     {
-        XDocument document = XDocument.Load(path);
-        RemoveGeneratedStatistics(document);
-        NormalizeTagDefaults(document);
-        NormalizeVideoUid(document, videoUid);
-        return CanonicalElement(document.Root);
+        XDocument first = XDocument.Load(left);
+        XDocument second = XDocument.Load(right);
+        return XNode.DeepEquals(first.Root, second.Root);
     }
 
     private static void NormalizeTagDefaults(XDocument document)
