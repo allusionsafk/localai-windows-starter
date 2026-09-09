@@ -1,6 +1,6 @@
-# Security policy
+# AFK LocalAI security policy
 
-AFK AI is Friend Beta software. Security and privacy reports are welcome,
+AFK LocalAI is Friend Beta software. Security and privacy reports are welcome,
 especially when the installer, local service boundary, diagnostics, update path,
 or download integrity could put a user's machine or data at risk.
 
@@ -20,7 +20,7 @@ https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
 Useful security reports include:
 
 - bypasses of installer or release integrity checks
-- AFK AI services becoming reachable outside the intended local boundary
+- AFK LocalAI services becoming reachable outside the intended local boundary
   without explicit opt-in
 - credential, secret, prompt, chat, document, or file-content leakage
 - command injection or unsafe privilege changes
@@ -51,7 +51,7 @@ Before sharing logs or screenshots, remove:
 
 ## Friend Beta boundary
 
-The current public Friend Beta is `v0.1.7rc1`.
+The current source candidate is `v0.2.0-rc1`.
 
 `master` can move ahead of that candidate, so every report should identify the
 tag or commit being tested.

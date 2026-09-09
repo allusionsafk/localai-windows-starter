@@ -1,90 +1,54 @@
-# AFK AI Friend Beta support
+# AFK LocalAI Friend Beta support
 
-AFK AI is currently **Friend Beta 0.1.7rc1**.
+AFK LocalAI `0.2.0-rc1` is prerelease software. Friend Beta support focuses on
+turning clean-machine setup and recovery failures into reproducible product
+fixes without asking testers to understand Docker, WSL, or PowerShell internals.
 
-Support during this stage has one goal: turn clean-machine failures into
-reproducible product fixes without asking testers to understand Docker, WSL,
-Ollama, or installer internals.
+## Before reporting a setup problem
 
-**[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)**
+1. Launch AFK LocalAI again. A partial setup should return to its saved
+   checkpoint and recheck the live machine state.
+2. Use the recovery action shown in the app. If Windows requested a restart,
+   restart before choosing **Try again**.
+3. Open **Start Menu → AFK LocalAI → Diagnostics**.
+4. Review the newest report in
+   `%LOCALAPPDATA%\AFK LocalAI\Diagnostics` before sharing it.
 
-## Current target
+The Diagnostics shortcut runs without a visible terminal. Reports redact the
+current profile path, but you should still check them for information you do
+not want to publish.
 
-| | |
-|---|---|
-| **OS** | Windows 11 |
-| **Accelerated path** | NVIDIA GPU |
-| **CPU-only fallback** | Supported with smaller models, but slow |
-| **Container runtime** | Docker Desktop |
-| **Model runtime** | Ollama for Windows |
-| **Disk** | Roughly 40 GB recommended for a comfortable first install |
+## What to include
 
-Hardware virtualization must be enabled for the Docker path.
-
-> [!IMPORTANT]
-> The current Friend Beta does not yet classify every virtualization, WSL, and
-> Docker blocker early enough. A clean-machine install can reach Docker Desktop
-> before the actionable Windows blocker is clear. Keep the exact error text if
-> this happens.
-
-## Installation or setup problem
-
-Use the **Installation / setup problem** issue form.
-
-Include:
-
-- AFK AI version or commit
-- installer phase or last heading shown
-- exact error text
-- whether Windows requested a restart
-- whether Docker Desktop opens successfully
+- AFK LocalAI version shown in **About AFK LocalAI**
+- the exact setup phase, status code, and message shown
+- whether AFK LocalAI offered **Resume setup**, **Try again**, or a restart
 - Windows version
-- GPU model and installed memory, only when relevant
-- a sanitized AFK AI diagnostic report, if one is available
+- whether Docker Desktop opens successfully
+- GPU model and memory only when the problem is hardware-related
+- a sanitized AFK LocalAI diagnostic report when useful
 
-Do not post credentials, `.env` contents, private documents, chats, prompts,
-cookies, tokens, or unrelated machine information.
+Do not include `.env` contents, credentials, tokens, cookies, chats, prompts,
+documents, model inputs, or unrelated machine details.
 
-## Hardware or compatibility problem
+## Issue types
 
-Use the **Hardware / compatibility problem** form when setup is blocked by:
+Use the repository's **Installation / setup problem** form for installation,
+virtualization, WSL, Docker, prerequisite, resume, upgrade, or uninstall bugs.
 
-- GPU or CPU support
-- memory
-- Windows edition
-- hardware virtualization
-- WSL
-- Docker compatibility
+Use **Hardware / compatibility problem** for GPU, CPU, memory, Windows edition,
+or unsupported-runtime questions.
 
-Include what AFK AI detected and what Windows or Docker reported.
+Use **General bug** for a reproducible failure after setup, such as starting the
+workspace, health reporting, model selection, or opening local chat.
 
-## General product bug
+For a security or privacy issue, do not open a public issue. Follow
+[SECURITY.md](SECURITY.md) and use GitHub private vulnerability reporting.
 
-Use the **General bug** form for a reproducible problem after setup, such as:
+## Current support boundary
 
-- a control command
-- a health check
-- a local service
-- model selection
-- Control Center behavior
-- documented behavior that does not match the product
-
-## Security or privacy issue
-
-Do not publish sensitive security details in a normal issue.
-
-Follow [SECURITY.md](SECURITY.md) and use GitHub private vulnerability
-reporting.
-
-## What Friend Beta support means
-
-Friend Beta is pre-release software. Clean-machine installation is still being
-validated, and the first friend run has not yet proven the complete install to
-chat path.
-
-A report that identifies one concrete failure and how to reproduce it is more
-useful right now than a broad feature request.
-
-Deferred areas include broad cross-platform installation, enterprise
-deployment, billing, licensing, and promises about third-party Docker or Ollama
-behavior that AFK AI does not control.
+The primary Friend Beta target is Windows 11 x64 with hardware virtualization,
+a healthy local Docker Desktop Linux-container engine, WSL 2 where Docker needs
+it, and an NVIDIA GPU. CPU-only use is supported with smaller models but can be
+slow. Broad enterprise deployment, Windows Server, ARM64, macOS, Linux desktop,
+AMD acceleration, and NPU paths are not qualified by this candidate.

@@ -176,6 +176,19 @@ if (Test-Path -LiteralPath $releaseWorkflowTests) {
     Add-Result 'Release workflow contracts' $releaseOk $releaseDetail
 }
 
+# 6g. Public instructions must describe the native AFK LocalAI distribution.
+$productDocsTests = Join-Path $PSScriptRoot 'Test-ProductDocsContracts.ps1'
+if (Test-Path -LiteralPath $productDocsTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $docsOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $productDocsTests 2>&1
+    $docsOk = ($LASTEXITCODE -eq 0)
+    $docsLines = @($docsOut | ForEach-Object { "$_" })
+    $docsSummary = @($docsLines | Where-Object { $_ -match 'PRODUCT DOCS CONTRACTS' } | Select-Object -First 1)
+    $docsDetail = if ($docsSummary) { "$($docsSummary[0])".Trim() } else { ($docsLines | Select-Object -Last 1) }
+    if (-not $docsOk) { $docsDetail = (@($docsLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Product documentation contracts' $docsOk $docsDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.
