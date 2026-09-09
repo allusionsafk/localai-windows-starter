@@ -47,6 +47,10 @@ $shellExe = Join-Path $shell 'AFKLocalAI.exe'
 if (-not (Test-Path -LiteralPath $shellExe -PathType Leaf)) {
   throw "Published shell is missing: '$shellExe'."
 }
+$shellMetadata = Join-Path $shell 'version.json'
+if (-not (Test-Path -LiteralPath $shellMetadata -PathType Leaf)) {
+  throw "Published shell metadata is missing: '$shellMetadata'."
+}
 
 if (Test-Path -LiteralPath $staging) {
   Remove-Item -LiteralPath $staging -Recurse -Force
@@ -62,6 +66,7 @@ foreach ($file in $validated) {
   Copy-Item -LiteralPath $file.Absolute -Destination $destination
 }
 Copy-Item -LiteralPath $shellExe -Destination (Join-Path $staging 'AFKLocalAI.exe')
+Copy-Item -LiteralPath $shellMetadata -Destination (Join-Path $staging 'version.json')
 
 $normalizedTimestamp = [DateTime]::SpecifyKind([DateTime]'2000-01-01T00:00:00', [DateTimeKind]::Utc)
 $payloadFiles = @(Get-ChildItem -LiteralPath $staging -Recurse -File | ForEach-Object {

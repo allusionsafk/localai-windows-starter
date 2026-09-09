@@ -107,6 +107,10 @@ try
     var uninstallOptions = CommandLineOptions.Parse(new[] { "--stop", "--silent" });
     Check("uninstall stop option parses", uninstallOptions.Stop);
     Check("silent option parses", uninstallOptions.Silent);
+    Check("self-test failures never open a dialog", !CommandLineFailurePolicy.ShouldShowDialog(new[] { "--self-test" }));
+    Check("silent failures never open a dialog", !CommandLineFailurePolicy.ShouldShowDialog(new[] { "--silent" }));
+    Check("interactive launch failures remain visible", CommandLineFailurePolicy.ShouldShowDialog(Array.Empty<string>()));
+    Check("command-line failure text is diagnostic", CommandLineFailurePolicy.Format(new InvalidOperationException("fixture failure")).Contains("fixture failure", StringComparison.Ordinal));
 
     Check("fresh state opens setup mode", AppModeResolver.Resolve(new ProvisioningState()) == AppMode.Setup);
     Check("usable state opens home mode", AppModeResolver.Resolve(new ProvisioningState { Usable = true }) == AppMode.Home);

@@ -150,6 +150,19 @@ if (Test-Path -LiteralPath $installerTests) {
     Add-Result 'Installer distribution contracts' $installerOk $installerDetail
 }
 
+# 6e. Exact-artifact lifecycle harness fail-closed unit tests.
+$lifecycleTests = Join-Path $PSScriptRoot 'Test-LifecycleHarness.ps1'
+if (Test-Path -LiteralPath $lifecycleTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $lifecycleOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $lifecycleTests 2>&1
+    $lifecycleOk = ($LASTEXITCODE -eq 0)
+    $lifecycleLines = @($lifecycleOut | ForEach-Object { "$_" })
+    $lifecycleSummary = @($lifecycleLines | Where-Object { $_ -match 'LIFECYCLE HARNESS TESTS' } | Select-Object -First 1)
+    $lifecycleDetail = if ($lifecycleSummary) { "$($lifecycleSummary[0])".Trim() } else { ($lifecycleLines | Select-Object -Last 1) }
+    if (-not $lifecycleOk) { $lifecycleDetail = (@($lifecycleLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'Installer lifecycle harness tests' $lifecycleOk $lifecycleDetail
+}
+
 # 7. Static analysis: zero Error-severity, and no NEW automatic-variable
 #    assignments beyond the known legacy baseline (burndown list in AGENTS.md).
 $autoVarBaseline = 0    # all known automatic-variable shadows fixed; any new hit fails the gate.

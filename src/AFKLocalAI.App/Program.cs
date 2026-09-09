@@ -16,6 +16,17 @@ public static class AppIdentity
     public const string SingleInstanceMutexName = @"Local\AFKLocalAI-8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0";
 }
 
+public static class CommandLineFailurePolicy
+{
+    public static bool ShouldShowDialog(IEnumerable<string> arguments) =>
+        !arguments.Any(argument =>
+            argument.Equals("--silent", StringComparison.OrdinalIgnoreCase) ||
+            argument.Equals("--self-test", StringComparison.OrdinalIgnoreCase));
+
+    public static string Format(Exception exception) =>
+        $"AFK LocalAI could not start: {exception}";
+}
+
 public sealed record CommandLineOptions(
     bool SelfTest = false,
     bool Diagnostics = false,
@@ -97,7 +108,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] arguments)
     {
-        var silent = arguments.Contains("--silent", StringComparer.OrdinalIgnoreCase);
+        var showFailureDialog = CommandLineFailurePolicy.ShouldShowDialog(arguments);
         try
         {
             var options = CommandLineOptions.Parse(arguments);
@@ -132,12 +143,14 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            if (!silent)
+            if (showFailureDialog)
                 MessageBox.Show(
                     $"AFK LocalAI could not start.\n\n{exception.Message}",
                     "AFK LocalAI",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+            else
+                WriteStandardError(CommandLineFailurePolicy.Format(exception));
             return 1;
         }
     }
@@ -159,9 +172,21 @@ internal static class Program
 
     private static void WriteStandardOutput(string value)
     {
+        WriteStandardStream(Console.OpenStandardOutput(), value);
+    }
+
+    private static void WriteStandardError(string value)
+    {
+        WriteStandardStream(Console.OpenStandardError(), value);
+    }
+
+    private static void WriteStandardStream(Stream stream, string value)
+    {
         var bytes = Encoding.UTF8.GetBytes(value + Environment.NewLine);
-        using var output = Console.OpenStandardOutput();
-        output.Write(bytes, 0, bytes.Length);
-        output.Flush();
+        using (stream)
+        {
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+        }
     }
 }

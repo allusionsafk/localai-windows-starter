@@ -16,9 +16,18 @@
 #ifndef SourceCommit
   #define SourceCommit "development"
 #endif
+#ifndef TestAppId
+  #define TestAppId "{{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}"
+#endif
+#ifndef TestDefaultDir
+  #define TestDefaultDir "{localappdata}\Programs\AFK LocalAI"
+#endif
+#ifndef TestGroupName
+  #define TestGroupName "AFK LocalAI"
+#endif
 
 [Setup]
-AppId={{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}
+AppId={#TestAppId}
 AppName=AFK LocalAI
 AppVersion={#AppVersion}
 AppVerName=AFK LocalAI {#AppVersion}
@@ -31,8 +40,8 @@ VersionInfoCompany=AFK
 VersionInfoDescription=AFK LocalAI Windows Setup ({#Channel}, {#SourceCommit})
 VersionInfoProductName=AFK LocalAI
 VersionInfoProductVersion={#FileVersion}
-DefaultDirName={localappdata}\Programs\AFK LocalAI
-DefaultGroupName=AFK LocalAI
+DefaultDirName={#TestDefaultDir}
+DefaultGroupName={#TestGroupName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -80,4 +89,4 @@ Name: "{autodesktop}\AFK LocalAI"; Filename: "{app}\AFKLocalAI.exe"; WorkingDir:
 Filename: "{app}\AFKLocalAI.exe"; Description: "Launch AFK LocalAI"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-Filename: "{app}\AFKLocalAI.exe"; Parameters: "--stop --silent"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "{app}\AFKLocalAI.exe"; Parameters: "--stop --silent"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "StopAFKLocalAI"

@@ -44,11 +44,11 @@ Write-Host '-- Inno installer contract' -ForegroundColor Cyan
 if (Test-Path -LiteralPath $issPath) {
   $iss = Get-Content -LiteralPath $issPath -Raw
   $required = [ordered]@{
-    'stable product AppId' = [regex]::Escape('AppId={{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}')
+    'stable product AppId' = [regex]::Escape('#define TestAppId "{{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}"')
     'per-user privileges' = '(?m)^PrivilegesRequired=lowest$'
     '64-bit architecture' = '(?m)^ArchitecturesAllowed=x64compatible$'
     '64-bit install mode' = '(?m)^ArchitecturesInstallIn64BitMode=x64compatible$'
-    'per-user program directory' = [regex]::Escape('DefaultDirName={localappdata}\Programs\AFK LocalAI')
+    'per-user program directory' = [regex]::Escape('#define TestDefaultDir "{localappdata}\Programs\AFK LocalAI"')
     'upgrade keeps install directory' = '(?m)^UsePreviousAppDir=yes$'
     'standard uninstall entry' = '(?m)^Uninstallable=yes$'
     'publisher metadata' = '(?m)^AppPublisher=AFK$'
@@ -63,6 +63,7 @@ if (Test-Path -LiteralPath $issPath) {
     'optional desktop shortcut' = 'Name: "desktopicon";.*Flags: unchecked'
     'post-install launch' = 'postinstall.*nowait.*skipifsilent'
     'hidden stop on uninstall' = '--stop.*runhidden'
+    'uninstall stop runs once' = 'RunOnceId: "StopAFKLocalAI"'
   }
   foreach ($item in $required.GetEnumerator()) {
     Assert-True $item.Key ($iss -match $item.Value) "pattern missing: $($item.Value)"
@@ -70,6 +71,9 @@ if (Test-Path -LiteralPath $issPath) {
   Assert-True 'normal installer paths never launch a console host' ($iss -notmatch '(?i)Filename:\s*"\{(?:cmd|sys)\}\\(?:cmd|WindowsPowerShell)')
   Assert-True 'uninstall preserves per-user AFK LocalAI state' ($iss -notmatch '(?i)\[UninstallDelete\][\s\S]*AFK LocalAI')
   Assert-True 'installer embeds no model weights' ($iss -notmatch '(?i)\.gguf|\.safetensors|\.bin\b')
+  Assert-True 'lifecycle test AppId can be isolated at compile time' ($iss -match '#ifndef TestAppId' -and $iss -match 'AppId=\{#TestAppId\}')
+  Assert-True 'lifecycle test install directory can be isolated at compile time' ($iss -match '#ifndef TestDefaultDir' -and $iss -match 'DefaultDirName=\{#TestDefaultDir\}')
+  Assert-True 'lifecycle test Start Menu group can be isolated at compile time' ($iss -match '#ifndef TestGroupName' -and $iss -match 'DefaultGroupName=\{#TestGroupName\}')
 }
 
 Write-Host '-- deterministic payload contract' -ForegroundColor Cyan
@@ -100,6 +104,9 @@ if (Test-Path -LiteralPath $stagePath) {
   Assert-True 'payload hashes every selected file' ($stage -match 'Get-FileHash' -and $stage -match 'SHA256')
   Assert-True 'payload manifest records source commit' ($stage -match 'source_commit')
   Assert-True 'payload records files in sorted order' ($stage -match 'Sort-Object')
+  Assert-True 'payload stages runtime metadata beside the native executable' (
+    $stage -match [regex]::Escape("Join-Path `$shell 'version.json'") -and
+    $stage -match [regex]::Escape("Join-Path `$staging 'version.json'"))
 }
 if (Test-Path -LiteralPath $buildPath) {
   $build = Get-Content -LiteralPath $buildPath -Raw
