@@ -46,7 +46,8 @@ public static class DvConversionPlanner
             return new(source, target, true, DvConversionMethod.StreamCopyEnhancementLayerDiscard,
                 DvRpuAction.RewriteToProfile81, DvEnhancementLayerAction.Discard,
                 source.EnhancementLayer == DvEnhancementLayer.Fel ? DvReasonCode.P7FelToP81FelDiscarded : DvReasonCode.P7MelToP81StreamCopy,
-                "Copy compressed base video, rewrite RPU for profile 8.1, and discard the profile 7 enhancement layer. This is not a full-fidelity claim.");
+                "Copy compressed base video, rewrite RPU for profile 8.1, and discard the profile 7 enhancement layer. This is not a full-fidelity claim.",
+                executorImplemented: true);
         }
         if (source.CompatibilityId != 1 || source.EnhancementLayer != DvEnhancementLayer.None)
             return Reject(DvReasonCode.InvalidSourceFacts, "Profile 8.1 requires compatibility ID 1 and no enhancement layer.");

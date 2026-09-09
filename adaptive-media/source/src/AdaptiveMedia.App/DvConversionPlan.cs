@@ -44,9 +44,11 @@ public sealed class DvConversionPlan
 {
     internal DvConversionPlan(DvSourceInfo source, DvConversionTarget target, bool supported,
         DvConversionMethod method, DvRpuAction rpu, DvEnhancementLayerAction el,
-        DvReasonCode reason, string explanation)
+        DvReasonCode reason, string explanation, bool executorImplemented = false)
     {
+        if (executorImplemented && !supported) throw new ArgumentException("An unsupported plan cannot be executable.", nameof(executorImplemented));
         Source = source; Target = target; Supported = supported; Method = method;
+        Executable = executorImplemented;
         RpuAction = rpu; EnhancementLayerAction = el;
         BaseVideoCopied = method is DvConversionMethod.StreamCopyMetadataRewrite or DvConversionMethod.StreamCopyEnhancementLayerDiscard;
         PixelsReencoded = method == DvConversionMethod.DecodeProcessReencode;
@@ -67,7 +69,7 @@ public sealed class DvConversionPlan
                 explanation += " FEL picture contribution will not be retained.";
             }
         }
-        codes.Add(DvReasonCode.ExecutorNotImplemented);
+        if (!executorImplemented) codes.Add(DvReasonCode.ExecutorNotImplemented);
         Codes = codes.ToImmutable(); Explanation = explanation;
         ExpectedOutput = supported ? target == DvConversionTarget.Profile81
             ? new(true, 8, 1, true, DvEnhancementLayer.None, DvCompatibility.Yes)
@@ -76,7 +78,7 @@ public sealed class DvConversionPlan
     public DvSourceInfo Source { get; }
     public DvConversionTarget Target { get; }
     public bool Supported { get; }
-    public bool Executable => false; // No runtime executor/capability validation in this milestone.
+    public bool Executable { get; }
     public DvConversionMethod Method { get; }
     public bool BaseVideoCopied { get; }
     public bool PixelsReencoded { get; }

@@ -39,7 +39,8 @@ foreach (var source in new[] { mel, fel, p81, p5, mel with { Profile = null } })
 foreach (var target in Enum.GetValues<DvConversionTarget>()) {
     var p = DvConversionPlanner.Build(source, target);
     Check(JsonSerializer.Serialize(p) == JsonSerializer.Serialize(DvConversionPlanner.Build(source with { }, target)), "Deterministic value-equivalent input");
-    Check(!p.Executable, "No executor exists yet");
+    bool p7To81 = source.Profile == 7 && target == DvConversionTarget.Profile81 && p.Supported;
+    Check(p.Executable == p7To81 && p.Executable == !p.Codes.Contains(DvReasonCode.ExecutorNotImplemented), "Only implemented P7 to P8.1 plans are executable");
     if (p.Method is DvConversionMethod.StreamCopyMetadataRewrite or DvConversionMethod.StreamCopyEnhancementLayerDiscard)
         Check(p.BaseVideoCopied && !p.PixelsReencoded && p.Acceleration == DvAccelerationRelevance.NotUseful, "Stream-copy invariant");
     if (p.EnhancementLayerAction == DvEnhancementLayerAction.Discard && source.EnhancementLayer == DvEnhancementLayer.Fel)
