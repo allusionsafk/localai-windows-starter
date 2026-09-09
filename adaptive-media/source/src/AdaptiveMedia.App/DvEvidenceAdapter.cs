@@ -66,7 +66,7 @@ public sealed class DvEvidenceAdapter
                 ["demux", "--el-only", elementary, "--el-out", enhancement], work, ToolTimeout, cancellationToken);
             bool actualEl = demux.ExitCode == 0 && File.Exists(enhancement) && new FileInfo(enhancement).Length > 0;
 
-            bool profileAgreement = probe.DvProfile == summary.Profile;
+            bool profileAgreement = probe.DvProfile == summary.Profile && probe.RpuPresent == true;
             bool countAgreement = summary.Frames > 0 && summary.Frames == probe.PacketCount;
             bool elAgreement = probe.ElPresent == actualEl;
             DvRpuStatus status = profileAgreement && countAgreement && elAgreement

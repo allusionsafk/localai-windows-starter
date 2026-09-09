@@ -1,4 +1,5 @@
 using AdaptiveMedia;
+using System.Security.Cryptography;
 
 if (args.SequenceEqual(["--sleep"]))
 {
@@ -67,6 +68,73 @@ try
         "FEL evidence covers the complete selected stream");
     Check(DvConversionPlanner.Build(fel.Source, DvConversionTarget.Profile81).Executable,
         "Real FEL evidence feeds the executable planner path");
+
+    static string Sha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
+    string executionRoot = Path.Combine(Path.GetTempPath(), "adaptive-media-dv-execution-tests-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(executionRoot);
+    try
+    {
+        var executor = new DvMatroskaP81Executor(tools, runner);
+        string felOutput = Path.Combine(executionRoot, "fel-output.mkv");
+        bool acknowledgementRequired = false;
+        try
+        {
+            await executor.ExecuteAsync(new(fel.SourcePath, felOutput,
+                DvConversionPlanner.Build(fel.Source, DvConversionTarget.Profile81), AcknowledgeFelLoss: false), CancellationToken.None);
+        }
+        catch (DvFelLossAcknowledgementRequiredException)
+        {
+            acknowledgementRequired = true;
+        }
+        Check(acknowledgementRequired && !File.Exists(felOutput), "FEL loss cannot be executed without explicit acknowledgement");
+
+        string melHash = Sha256(mel.SourcePath);
+        string melOutput = Path.Combine(executionRoot, "mel-output.mkv");
+        DvExecutionResult melResult = await executor.ExecuteAsync(new(mel.SourcePath, melOutput,
+            DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), AcknowledgeFelLoss: false), CancellationToken.None);
+        Check(melResult.Promoted && File.Exists(melOutput), "Validated MEL output is promoted");
+        Check(melResult.SourceSha256Before == melHash && melResult.SourceSha256After == melHash && Sha256(mel.SourcePath) == melHash,
+            "MEL source remains byte-for-byte unchanged");
+        Check(melResult.Validation is { Profile81: true, RpuValidated: true, EnhancementLayerAbsent: true,
+            BaseVideoIdentical: true, VideoTimestampsIdentical: true }, "MEL output proves profile and stream-copy invariants");
+        Check(melResult.Validation is { NonVideoPayloadsIdentical: true, TrackInventoryPreserved: true,
+            ChaptersPreserved: true, AttachmentsPreserved: true, MetadataPreserved: true },
+            "MEL output preserves supported Matroska content");
+
+        bool noOverwrite = false;
+        try
+        {
+            await executor.ExecuteAsync(new(mel.SourcePath, melOutput,
+                DvConversionPlanner.Build(mel.Source, DvConversionTarget.Profile81), false), CancellationToken.None);
+        }
+        catch (IOException)
+        {
+            noOverwrite = true;
+        }
+        Check(noOverwrite && melResult.OutputSha256 == Sha256(melOutput), "Existing destinations are never overwritten");
+
+        string felHash = Sha256(fel.SourcePath);
+        DvExecutionResult felResult = await executor.ExecuteAsync(new(fel.SourcePath, felOutput,
+            DvConversionPlanner.Build(fel.Source, DvConversionTarget.Profile81), AcknowledgeFelLoss: true), CancellationToken.None);
+        Check(felResult.Promoted && felResult.Validation.Profile81 && felResult.Validation.BaseVideoIdentical,
+            "Acknowledged FEL converts to validated Profile 8.1 with copied base");
+        Check(felResult.Losses.HasFlag(DvLossClassification.FelPictureContributionLost) &&
+            felResult.Codes.Contains(DvReasonCode.P7FelToP81FelDiscarded) &&
+            felResult.Codes.Contains(DvReasonCode.FelPictureContributionNotRetained),
+            "FEL result cannot hide picture-contribution loss");
+        Check(felResult.SourceSha256Before == felHash && felResult.SourceSha256After == felHash && Sha256(fel.SourcePath) == felHash,
+            "FEL source remains byte-for-byte unchanged");
+        Check(!Directory.EnumerateDirectories(executionRoot, ".adaptivemedia-dv-*").Any(),
+            "Transaction directories are removed after success and rejection");
+    }
+    finally
+    {
+        Directory.Delete(executionRoot, recursive: true);
+    }
 
     Console.WriteLine($"PASS: {assertions} Dolby Vision execution assertions");
     return 0;
