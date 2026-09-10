@@ -16,6 +16,14 @@ enhancement layer, preserves supported tracks/container data, and promotes only 
 independently validated temporary output. FEL conversion requires explicit
 acknowledgement and always reports lost FEL picture contribution.
 
+The executor performs a destination-volume scratch preflight before helper launch.
+Its conservative artifact allowance is approximately three source sizes plus
+Matroska overhead, with a separately reported safety reserve. Validation artifacts
+are consumed and deleted sequentially; this reduces measured checked-in-fixture
+peaks from 3.362x to 2.011x for MEL and 1.714x for FEL without removing any
+profile/RPU/EL, normalized-base, source-integrity, stream, chapter, attachment, or
+metadata proof.
+
 Run its non-skipping, provenance-backed real-media regression on Windows with
 FFprobe 7.1 on PATH:
 

@@ -17,7 +17,11 @@ public sealed class DvEvidenceAdapter
         this.process = process ?? throw new ArgumentNullException(nameof(process));
     }
 
-    public async Task<DvMatroskaEvidence> ReadAsync(string sourcePath, CancellationToken cancellationToken)
+    public Task<DvMatroskaEvidence> ReadAsync(string sourcePath, CancellationToken cancellationToken) =>
+        ReadAsync(sourcePath, cancellationToken, null);
+
+    internal async Task<DvMatroskaEvidence> ReadAsync(string sourcePath, CancellationToken cancellationToken,
+        Action<long>? scratchObserver)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         sourcePath = Path.GetFullPath(sourcePath);
@@ -45,9 +49,11 @@ public sealed class DvEvidenceAdapter
 
             string elementary = Path.Combine(work, "source.hevc");
             await RequiredAsync(tools.MkvExtract, [sourcePath, "tracks", $"{videoTrack.Id}:{elementary}"], work, cancellationToken);
+            ObserveScratch(work, scratchObserver);
             string rpu = Path.Combine(work, "source.rpu.bin");
             DvToolResult extraction = await process.RunAsync(tools.DoviTool,
                 ["extract-rpu", "-i", elementary, "-o", rpu], work, ToolTimeout, cancellationToken);
+            ObserveScratch(work, scratchObserver);
             if (extraction.ExitCode != 0 || !File.Exists(rpu) || new FileInfo(rpu).Length == 0)
             {
                 DvDetection detection = probe.DvProfile is null ? DvDetection.NotDetected : DvDetection.Detected;
@@ -64,6 +70,7 @@ public sealed class DvEvidenceAdapter
             string enhancement = Path.Combine(work, "source.el.hevc");
             DvToolResult demux = await process.RunAsync(tools.DoviTool,
                 ["demux", "--el-only", elementary, "--el-out", enhancement], work, ToolTimeout, cancellationToken);
+            ObserveScratch(work, scratchObserver);
             string demuxDiagnostic = Compact(demux.Error + Environment.NewLine + demux.Output);
             bool explicitNoEl = demux.ExitCode == 1 &&
                 demuxDiagnostic == "Error: No enhancement layer was found in input file" && !File.Exists(enhancement);
@@ -106,6 +113,18 @@ public sealed class DvEvidenceAdapter
         if (result.ExitCode != 0)
             throw new DvEvidenceException($"Required tool '{Path.GetFileName(executable)}' failed: {Compact(result.Error)}");
         return result;
+    }
+
+    private static void ObserveScratch(string work, Action<long>? observer)
+    {
+        if (observer is null) return;
+        long total = 0;
+        foreach (string path in Directory.EnumerateFiles(work, "*", SearchOption.AllDirectories))
+        {
+            long length = new FileInfo(path).Length;
+            total = total > long.MaxValue - length ? long.MaxValue : total + length;
+        }
+        observer(total);
     }
 
     private static string Compact(string value) => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();

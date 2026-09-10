@@ -33,7 +33,9 @@ public sealed record DvExecutionResult(
     DvSourceInfo Output,
     DvLossClassification Losses,
     ImmutableArray<DvReasonCode> Codes,
-    DvValidationReport Validation);
+    DvValidationReport Validation,
+    DvScratchPreflight ScratchPreflight,
+    long PeakScratchBytes);
 
 public sealed class DvFelLossAcknowledgementRequiredException()
     : InvalidOperationException("Profile 7 FEL picture contribution will be discarded; explicit acknowledgement is required.");
@@ -52,12 +54,29 @@ public sealed class DvMatroskaP81Executor
     private readonly DvToolPaths tools;
     private readonly IDvToolProcess process;
     private readonly DvEvidenceAdapter evidence;
+    private readonly IDvFreeSpaceProvider freeSpace;
 
-    public DvMatroskaP81Executor(DvToolPaths tools, IDvToolProcess process)
+    public DvMatroskaP81Executor(DvToolPaths tools, IDvToolProcess process,
+        IDvFreeSpaceProvider? freeSpace = null)
     {
         this.tools = tools ?? throw new ArgumentNullException(nameof(tools));
         this.process = process ?? throw new ArgumentNullException(nameof(process));
+        this.freeSpace = freeSpace ?? new DvDriveFreeSpaceProvider();
         evidence = new DvEvidenceAdapter(tools, process);
+    }
+
+    public DvScratchPreflight Preflight(string sourcePath, string destinationPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        string source = Path.GetFullPath(sourcePath);
+        string destination = Path.GetFullPath(destinationPath);
+        if (!File.Exists(source)) throw new FileNotFoundException("Dolby Vision source was not found.", source);
+        string? destinationDirectory = Path.GetDirectoryName(destination);
+        if (string.IsNullOrEmpty(destinationDirectory) || !Directory.Exists(destinationDirectory))
+            throw new DirectoryNotFoundException($"Destination directory does not exist: {destinationDirectory}");
+        return DvScratchPreflight.Calculate(new FileInfo(source).Length,
+            freeSpace.GetAvailableBytes(destinationDirectory));
     }
 
     public async Task<DvExecutionResult> ExecuteAsync(DvExecutionRequest request, CancellationToken cancellationToken)
@@ -77,61 +96,82 @@ public sealed class DvMatroskaP81Executor
         if (string.IsNullOrEmpty(destinationDirectory) || !Directory.Exists(destinationDirectory))
             throw new DirectoryNotFoundException($"Destination directory does not exist: {destinationDirectory}");
 
+        DvScratchPreflight preflight = Preflight(source, destination);
+        if (!preflight.Pass) throw new DvScratchSpaceException(preflight);
+
         string sourceHashBefore = await HashFileAsync(source, cancellationToken).ConfigureAwait(false);
         string transaction = Path.Combine(destinationDirectory, ".adaptivemedia-dv-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(transaction);
+        var scratch = new ScratchTracker(transaction);
         string temporaryOutput = Path.Combine(transaction, "validated-output.mkv");
         try
         {
-            DvMatroskaEvidence sourceEvidence = await evidence.ReadAsync(source, cancellationToken).ConfigureAwait(false);
+            DvMatroskaEvidence sourceEvidence = await evidence.ReadAsync(source, cancellationToken, scratch.ObserveExternal)
+                .ConfigureAwait(false);
             DvConversionPlan observedPlan = DvConversionPlanner.Build(sourceEvidence.Source, DvConversionTarget.Profile81);
             if (!EquivalentPlans(request.Plan, observedPlan))
                 throw new DvExecutionException("The supplied plan no longer matches evidence read from the source.");
 
-            ExtractedMedia sourceMedia = await ExtractAsync(source, sourceEvidence.Inventory, "source", transaction, cancellationToken)
+            string sourceVideo = Path.Combine(transaction, $"source-track-{sourceEvidence.VideoTrackId}.hevc");
+            await ExtractTrackAsync(source, sourceEvidence.VideoTrackId, sourceVideo, transaction, cancellationToken)
+                .ConfigureAwait(false);
+            string sourceVideoTimestamps = Path.Combine(transaction, $"source-timestamps-{sourceEvidence.VideoTrackId}.txt");
+            await ExtractTimestampsAsync(source, sourceEvidence.VideoTrackId, sourceVideoTimestamps, transaction, cancellationToken)
+                .ConfigureAwait(false);
+            string sourceTags = Path.Combine(transaction, "source-tags.xml");
+            await ExtractTagsAsync(source, sourceTags, transaction, cancellationToken).ConfigureAwait(false);
+            scratch.Observe();
+
+            string baseHash = await NormalizedBaseHashAsync(sourceVideo, "source-base", transaction, scratch, cancellationToken)
                 .ConfigureAwait(false);
             string convertedVideo = Path.Combine(transaction, "converted-video.hevc");
             await RequiredAsync(tools.DoviTool,
-                ["-m", "2", "convert", "--discard", sourceMedia.VideoPayload, "-o", convertedVideo],
+                ["-m", "2", "convert", "--discard", sourceVideo, "-o", convertedVideo],
                 transaction, cancellationToken).ConfigureAwait(false);
             if (!File.Exists(convertedVideo) || new FileInfo(convertedVideo).Length == 0)
                 throw new DvExecutionException("dovi_tool did not produce a converted HEVC stream.");
+            scratch.Observe();
+            DeleteFile(sourceVideo);
 
             await RemuxAsync(source, temporaryOutput, convertedVideo, sourceEvidence.Inventory,
-                sourceMedia.VideoTimestamps, transaction, cancellationToken).ConfigureAwait(false);
+                sourceVideoTimestamps, transaction, cancellationToken).ConfigureAwait(false);
             if (!File.Exists(temporaryOutput) || new FileInfo(temporaryOutput).Length == 0)
                 throw new DvExecutionException("mkvmerge did not produce a temporary Matroska output.");
+            scratch.Observe();
 
             ulong outputVideoUid = await ReadVideoTrackUidAsync(temporaryOutput, transaction, cancellationToken).ConfigureAwait(false);
-            DvTrackInventory sourceVideo = sourceEvidence.Inventory.Tracks.Single(track => track.Id == sourceEvidence.VideoTrackId);
-            if (sourceVideo.DefaultDuration is long defaultDuration)
+            DvTrackInventory sourceVideoTrack = sourceEvidence.Inventory.Tracks.Single(track => track.Id == sourceEvidence.VideoTrackId);
+            if (sourceVideoTrack.DefaultDuration is long defaultDuration)
             {
                 await RequiredAsync(tools.MkvPropEdit,
                     [temporaryOutput, "--edit", "track:v1", "--set", $"default-duration={defaultDuration}"],
                     transaction, cancellationToken).ConfigureAwait(false);
             }
             string rewrittenTags = Path.Combine(transaction, "preserved-tags.xml");
-            RewriteTags(sourceMedia.Tags, rewrittenTags, sourceEvidence.VideoTrackUid, outputVideoUid);
+            RewriteTags(sourceTags, rewrittenTags, sourceEvidence.VideoTrackUid, outputVideoUid);
             await RequiredAsync(tools.MkvPropEdit,
                 [temporaryOutput, "--tags", $"all:{rewrittenTags}"], transaction, cancellationToken).ConfigureAwait(false);
+            scratch.Observe();
+            DeleteFile(rewrittenTags);
+            DeleteFile(convertedVideo);
 
-            DvMatroskaEvidence outputEvidence = await evidence.ReadAsync(temporaryOutput, cancellationToken).ConfigureAwait(false);
-            ExtractedMedia outputMedia = await ExtractAsync(temporaryOutput, outputEvidence.Inventory, "output", transaction, cancellationToken)
+            DvMatroskaEvidence outputEvidence = await evidence.ReadAsync(temporaryOutput, cancellationToken, scratch.ObserveExternal)
                 .ConfigureAwait(false);
-            DvValidationReport validation = await ValidateAsync(sourceEvidence, outputEvidence, sourceMedia, outputMedia,
-                transaction, cancellationToken).ConfigureAwait(false);
+            DvValidationReport validation = await ValidateAsync(sourceEvidence, outputEvidence, source, temporaryOutput,
+                sourceVideoTimestamps, sourceTags, baseHash, transaction, scratch, cancellationToken).ConfigureAwait(false);
             RequireAllValidation(validation);
 
             string outputHash = await HashFileAsync(temporaryOutput, cancellationToken).ConfigureAwait(false);
-            string baseHash = await NormalizedBaseHashAsync(sourceMedia.VideoPayload, "result-base", transaction, cancellationToken)
-                .ConfigureAwait(false);
+            scratch.Observe();
             string sourceHashAfter = await HashFileAsync(source, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal))
                 throw new DvExecutionException("The source changed during conversion; the output will not be promoted.");
 
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryOutput, destination, overwrite: false);
             return new(true, destination, sourceHashBefore, sourceHashAfter, outputHash, baseHash,
-                sourceEvidence.Source, outputEvidence.Source, observedPlan.Losses, observedPlan.Codes, validation);
+                sourceEvidence.Source, outputEvidence.Source, observedPlan.Losses, observedPlan.Codes, validation,
+                preflight, scratch.PeakBytes);
         }
         finally
         {
@@ -141,42 +181,17 @@ public sealed class DvMatroskaP81Executor
         }
     }
 
-    private async Task<ExtractedMedia> ExtractAsync(string matroska, DvMatroskaInventory inventory,
-        string prefix, string work, CancellationToken cancellationToken)
-    {
-        var payloads = new Dictionary<int, string>();
-        var timestamps = new Dictionary<int, string>();
-        foreach (DvTrackInventory track in inventory.Tracks)
-        {
-            string extension = track.Type == "video" ? ".hevc" : ".bin";
-            string payload = Path.Combine(work, $"{prefix}-track-{track.Id}{extension}");
-            string timestamp = Path.Combine(work, $"{prefix}-timestamps-{track.Id}.txt");
-            await RequiredAsync(tools.MkvExtract, [matroska, "tracks", $"{track.Id}:{payload}"], work, cancellationToken)
-                .ConfigureAwait(false);
-            await RequiredAsync(tools.MkvExtract, [matroska, "timestamps_v2", $"{track.Id}:{timestamp}"], work, cancellationToken)
-                .ConfigureAwait(false);
-            payloads.Add(track.Id, payload);
-            timestamps.Add(track.Id, timestamp);
-        }
+    private Task ExtractTrackAsync(string matroska, int trackId, string output, string work,
+        CancellationToken cancellationToken) =>
+        RequiredAsync(tools.MkvExtract, [matroska, "tracks", $"{trackId}:{output}"], work, cancellationToken);
 
-        string chapters = Path.Combine(work, $"{prefix}-chapters.xml");
-        if (inventory.ChapterEntries > 0)
-            await RequiredAsync(tools.MkvExtract, [matroska, "chapters", chapters], work, cancellationToken).ConfigureAwait(false);
-        string tags = Path.Combine(work, $"{prefix}-tags.xml");
-        await RequiredAsync(tools.MkvExtract, [matroska, "tags", tags], work, cancellationToken).ConfigureAwait(false);
+    private Task ExtractTimestampsAsync(string matroska, int trackId, string output, string work,
+        CancellationToken cancellationToken) =>
+        RequiredAsync(tools.MkvExtract, [matroska, "timestamps_v2", $"{trackId}:{output}"], work, cancellationToken);
 
-        var attachments = new Dictionary<int, string>();
-        foreach (DvAttachmentInventory attachment in inventory.Attachments)
-        {
-            string path = Path.Combine(work, $"{prefix}-attachment-{attachment.Id}.bin");
-            await RequiredAsync(tools.MkvExtract, [matroska, "attachments", $"{attachment.Id}:{path}"], work, cancellationToken)
-                .ConfigureAwait(false);
-            attachments.Add(attachment.Id, path);
-        }
-
-        int videoId = inventory.Tracks.Single(track => track.Type == "video").Id;
-        return new(payloads[videoId], timestamps[videoId], payloads, timestamps, attachments, chapters, tags);
-    }
+    private Task ExtractTagsAsync(string matroska, string output, string work,
+        CancellationToken cancellationToken) =>
+        RequiredAsync(tools.MkvExtract, [matroska, "tags", output], work, cancellationToken);
 
     private async Task RemuxAsync(string source, string output, string convertedVideo,
         DvMatroskaInventory inventory, string videoTimestamps, string work, CancellationToken cancellationToken)
@@ -215,8 +230,9 @@ public sealed class DvMatroskaP81Executor
         arguments.AddRange([name, $"0:{(enabled ? "yes" : "no")}"]);
 
     private async Task<DvValidationReport> ValidateAsync(DvMatroskaEvidence sourceEvidence,
-        DvMatroskaEvidence outputEvidence, ExtractedMedia source, ExtractedMedia output,
-        string work, CancellationToken cancellationToken)
+        DvMatroskaEvidence outputEvidence, string sourceMatroska, string outputMatroska,
+        string sourceVideoTimestamps, string sourceTags, string sourceBaseHash,
+        string work, ScratchTracker scratch, CancellationToken cancellationToken)
     {
         bool profile = outputEvidence.Source is { Detection: DvDetection.Detected, Profile: 8, CompatibilityId: 1,
             Hdr10Base: DvCompatibility.Yes };
@@ -225,15 +241,25 @@ public sealed class DvMatroskaP81Executor
         bool noEnhancement = outputEvidence.Source.EnhancementLayer == DvEnhancementLayer.None &&
             !outputEvidence.EnhancementLayerPresent;
 
-        string sourceBase = await NormalizedBaseHashAsync(source.VideoPayload, "source-base", work, cancellationToken)
-            .ConfigureAwait(false);
-        string outputBase = await NormalizedBaseHashAsync(output.VideoPayload, "output-base", work, cancellationToken)
-            .ConfigureAwait(false);
-        bool videoTimestamps = await FilesEqualAsync(source.VideoTimestamps, output.VideoTimestamps, cancellationToken)
-            .ConfigureAwait(false);
-
         int sourceVideoId = sourceEvidence.VideoTrackId;
         int outputVideoId = outputEvidence.VideoTrackId;
+        string outputVideo = Path.Combine(work, $"output-track-{outputVideoId}.hevc");
+        await ExtractTrackAsync(outputMatroska, outputVideoId, outputVideo, work, cancellationToken).ConfigureAwait(false);
+        scratch.Observe();
+        string outputBaseHash = await NormalizedBaseHashAsync(outputVideo, "output-base", work, scratch, cancellationToken)
+            .ConfigureAwait(false);
+        bool baseVideo = string.Equals(sourceBaseHash, outputBaseHash, StringComparison.Ordinal);
+        DeleteFile(outputVideo);
+
+        string outputVideoTimestamps = Path.Combine(work, $"output-timestamps-{outputVideoId}.txt");
+        await ExtractTimestampsAsync(outputMatroska, outputVideoId, outputVideoTimestamps, work, cancellationToken)
+            .ConfigureAwait(false);
+        scratch.Observe();
+        bool videoTimestamps = await FilesEqualAsync(sourceVideoTimestamps, outputVideoTimestamps, cancellationToken)
+            .ConfigureAwait(false);
+        DeleteFile(sourceVideoTimestamps);
+        DeleteFile(outputVideoTimestamps);
+
         DvTrackInventory[] sourceNonVideo = sourceEvidence.Inventory.Tracks.Where(track => track.Id != sourceVideoId).ToArray();
         DvTrackInventory[] outputNonVideo = outputEvidence.Inventory.Tracks.Where(track => track.Id != outputVideoId).ToArray();
         bool nonVideoPayloads = sourceNonVideo.Length == outputNonVideo.Length;
@@ -241,29 +267,73 @@ public sealed class DvMatroskaP81Executor
         {
             DvTrackInventory left = sourceNonVideo[index];
             DvTrackInventory right = outputNonVideo[index];
-            nonVideoPayloads = left.Id == right.Id &&
-                await FilesEqualAsync(source.Payloads[left.Id], output.Payloads[right.Id], cancellationToken).ConfigureAwait(false) &&
-                await FilesEqualAsync(source.Timestamps[left.Id], output.Timestamps[right.Id], cancellationToken).ConfigureAwait(false);
+            if (left.Id != right.Id)
+            {
+                nonVideoPayloads = false;
+                break;
+            }
+
+            string sourcePayload = Path.Combine(work, $"source-track-{left.Id}.bin");
+            string outputPayload = Path.Combine(work, $"output-track-{right.Id}.bin");
+            await ExtractTrackAsync(sourceMatroska, left.Id, sourcePayload, work, cancellationToken).ConfigureAwait(false);
+            await ExtractTrackAsync(outputMatroska, right.Id, outputPayload, work, cancellationToken).ConfigureAwait(false);
+            scratch.Observe();
+            nonVideoPayloads = await FilesEqualAsync(sourcePayload, outputPayload, cancellationToken).ConfigureAwait(false);
+            DeleteFile(sourcePayload);
+            DeleteFile(outputPayload);
+            if (!nonVideoPayloads) break;
+
+            string sourceTimestamps = Path.Combine(work, $"source-timestamps-{left.Id}.txt");
+            string outputTimestamps = Path.Combine(work, $"output-timestamps-{right.Id}.txt");
+            await ExtractTimestampsAsync(sourceMatroska, left.Id, sourceTimestamps, work, cancellationToken).ConfigureAwait(false);
+            await ExtractTimestampsAsync(outputMatroska, right.Id, outputTimestamps, work, cancellationToken).ConfigureAwait(false);
+            scratch.Observe();
+            nonVideoPayloads = await FilesEqualAsync(sourceTimestamps, outputTimestamps, cancellationToken).ConfigureAwait(false);
+            DeleteFile(sourceTimestamps);
+            DeleteFile(outputTimestamps);
         }
 
         bool tracks = InventoriesEqual(sourceEvidence.Inventory, outputEvidence.Inventory, sourceVideoId, outputVideoId);
-        bool chapters = sourceEvidence.Inventory.ChapterEntries == outputEvidence.Inventory.ChapterEntries &&
-            (sourceEvidence.Inventory.ChapterEntries == 0 || ChapterXmlEqual(source.Chapters, output.Chapters));
+        bool chapters = sourceEvidence.Inventory.ChapterEntries == outputEvidence.Inventory.ChapterEntries;
+        if (chapters && sourceEvidence.Inventory.ChapterEntries > 0)
+        {
+            string sourceChapters = Path.Combine(work, "source-chapters.xml");
+            string outputChapters = Path.Combine(work, "output-chapters.xml");
+            await RequiredAsync(tools.MkvExtract, [sourceMatroska, "chapters", sourceChapters], work, cancellationToken)
+                .ConfigureAwait(false);
+            await RequiredAsync(tools.MkvExtract, [outputMatroska, "chapters", outputChapters], work, cancellationToken)
+                .ConfigureAwait(false);
+            scratch.Observe();
+            chapters = ChapterXmlEqual(sourceChapters, outputChapters);
+            DeleteFile(sourceChapters);
+            DeleteFile(outputChapters);
+        }
+
         bool attachmentInventory = sourceEvidence.Inventory.Attachments.SequenceEqual(outputEvidence.Inventory.Attachments);
         bool attachmentPayloads = attachmentInventory;
         foreach (DvAttachmentInventory item in sourceEvidence.Inventory.Attachments)
         {
-            if (!attachmentPayloads || !output.Attachments.TryGetValue(item.Id, out string? outputPath))
-            {
-                attachmentPayloads = false;
-                break;
-            }
-            attachmentPayloads = await FilesEqualAsync(source.Attachments[item.Id], outputPath, cancellationToken).ConfigureAwait(false);
+            if (!attachmentPayloads) break;
+            string sourceAttachment = Path.Combine(work, $"source-attachment-{item.Id}.bin");
+            string outputAttachment = Path.Combine(work, $"output-attachment-{item.Id}.bin");
+            await RequiredAsync(tools.MkvExtract, [sourceMatroska, "attachments", $"{item.Id}:{sourceAttachment}"], work, cancellationToken)
+                .ConfigureAwait(false);
+            await RequiredAsync(tools.MkvExtract, [outputMatroska, "attachments", $"{item.Id}:{outputAttachment}"], work, cancellationToken)
+                .ConfigureAwait(false);
+            scratch.Observe();
+            attachmentPayloads = await FilesEqualAsync(sourceAttachment, outputAttachment, cancellationToken).ConfigureAwait(false);
+            DeleteFile(sourceAttachment);
+            DeleteFile(outputAttachment);
         }
         bool title = sourceEvidence.Inventory.Title == outputEvidence.Inventory.Title;
         bool date = DatesEqual(sourceEvidence.Inventory.DateUtc, outputEvidence.Inventory.DateUtc);
         bool scale = sourceEvidence.Inventory.TimestampScale == outputEvidence.Inventory.TimestampScale;
-        bool tags = XmlEqual(source.Tags, output.Tags, sourceEvidence.VideoTrackUid, outputEvidence.VideoTrackUid);
+        string outputTags = Path.Combine(work, "output-tags.xml");
+        await ExtractTagsAsync(outputMatroska, outputTags, work, cancellationToken).ConfigureAwait(false);
+        scratch.Observe();
+        bool tags = XmlEqual(sourceTags, outputTags, sourceEvidence.VideoTrackUid, outputEvidence.VideoTrackUid);
+        DeleteFile(sourceTags);
+        DeleteFile(outputTags);
         bool metadata = title && date && scale && tags;
         string? detail = metadata ? null : $"metadata(title={title}, date={date}, timestampScale={scale}, tags={tags}; " +
             $"sourceTitle={sourceEvidence.Inventory.Title}, outputTitle={outputEvidence.Inventory.Title}; " +
@@ -271,18 +341,21 @@ public sealed class DvMatroskaP81Executor
             $"sourceScale={sourceEvidence.Inventory.TimestampScale}, outputScale={outputEvidence.Inventory.TimestampScale})";
 
         return new(profile, rpu, noEnhancement,
-            string.Equals(sourceBase, outputBase, StringComparison.Ordinal), videoTimestamps,
+            baseVideo, videoTimestamps,
             nonVideoPayloads, tracks, chapters, attachmentInventory && attachmentPayloads, metadata, detail);
     }
 
     private async Task<string> NormalizedBaseHashAsync(string video, string name, string work,
-        CancellationToken cancellationToken)
+        ScratchTracker scratch, CancellationToken cancellationToken)
     {
         string output = Path.Combine(work, name + ".hevc");
         await RequiredAsync(tools.DoviTool, ["remove", video, "-o", output], work, cancellationToken).ConfigureAwait(false);
         if (!File.Exists(output) || new FileInfo(output).Length == 0)
             throw new DvExecutionException("dovi_tool did not produce a normalized base stream for validation.");
-        return await HashFileAsync(output, cancellationToken).ConfigureAwait(false);
+        scratch.Observe();
+        string hash = await HashFileAsync(output, cancellationToken).ConfigureAwait(false);
+        DeleteFile(output);
+        return hash;
     }
 
     private async Task<ulong> ReadVideoTrackUidAsync(string matroska, string work, CancellationToken cancellationToken)
@@ -444,6 +517,11 @@ public sealed class DvMatroskaP81Executor
     private static bool PathsEqual(string left, string right) =>
         string.Equals(left, right, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
+    private static void DeleteFile(string path)
+    {
+        if (File.Exists(path)) File.Delete(path);
+    }
+
     private static void RequireAllValidation(DvValidationReport validation)
     {
         if (validation.Profile81 && validation.RpuValidated && validation.EnhancementLayerAbsent &&
@@ -453,7 +531,24 @@ public sealed class DvMatroskaP81Executor
         throw new DvExecutionException("Independent output validation failed; the temporary file will not be promoted. " + validation);
     }
 
-    private sealed record ExtractedMedia(string VideoPayload, string VideoTimestamps,
-        IReadOnlyDictionary<int, string> Payloads, IReadOnlyDictionary<int, string> Timestamps,
-        IReadOnlyDictionary<int, string> Attachments, string Chapters, string Tags);
+    private sealed class ScratchTracker(string transaction)
+    {
+        public long PeakBytes { get; private set; }
+
+        public void Observe() => ObserveExternal(0);
+
+        public void ObserveExternal(long externalBytes)
+        {
+            long total = externalBytes;
+            if (Directory.Exists(transaction))
+            {
+                foreach (string path in Directory.EnumerateFiles(transaction, "*", SearchOption.AllDirectories))
+                {
+                    long length = new FileInfo(path).Length;
+                    total = total > long.MaxValue - length ? long.MaxValue : total + length;
+                }
+            }
+            PeakBytes = Math.Max(PeakBytes, total);
+        }
+    }
 }

@@ -89,6 +89,16 @@ content. Only a fully validated temporary MKV is atomically moved to the request
 path, and transaction data is cleaned on success, rejection, cancellation, or
 failure.
 
+Before source hashing or helper launch, the executor reports and enforces a
+destination-volume scratch preflight. Its conservative artifact bound is two source
+sizes for non-output temporary data plus one source size and Matroska overhead for
+the temporary output; it also reserves a separate safety margin. Arithmetic is
+saturating and an unavailable byte fails closed. Video normalization files and
+source/output validation payloads are produced, hashed/compared, and deleted in
+dependency order, so the output plus at most one validation pair remains live. The
+report distinguishes artifact allowance, output allowance, safety reserve, current
+availability, and the exact pass/fail reason.
+
 Supported preservation is explicit: original track order; all non-video payloads
 and timestamps; video timestamps and exact default duration; track language, name,
 enabled/default/forced/accessibility/original/commentary flags and typed header
@@ -136,7 +146,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File tests/Run-DolbyVisionExecutionTest
 ```
 
 The established counts are 220 existing assertions, exactly 58 planner/contract
-assertions, and 29 real execution assertions with no skips.
+assertions, and 41 real execution assertions with no skips. The execution suite
+includes preflight boundaries, observed artifact lifetimes, late cancellation,
+cleanup-failure precedence, stale-plan rejection, source mutation, and a sabotaged
+zero-exit conversion.
 
 P8.1 -> HDR10 execution, P5/pixel conversion, NVENC/libplacebo GPU conversion,
 Shadow Transcode, installer changes, playback integration, and broad WPF UI remain
