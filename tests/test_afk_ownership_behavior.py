@@ -15,7 +15,13 @@ from pathlib import Path
 from localai import afk_ownership
 from localai.ops import CommandResult
 
-WORKBENCH_COMPOSE = r"C:\Users\jidan\localai\docker-compose.yml"
+# Stands in for the private engineering workbench, or any other checkout sharing
+# the machine. Deliberately synthetic: a reserved-for-documentation drive letter
+# and a self-describing directory, so it can never be read as a real developer's
+# home path. What the tests actually exercise is that this path is *different*
+# from the installation's own compose file, so any absolute path serves - and a
+# fake one keeps one contributor's machine layout out of a public repository.
+WORKBENCH_COMPOSE = r"Q:\example-other-checkout\docker-compose.yml"
 
 # Nothing the AFK uninstaller runs may contain any of these.
 FORBIDDEN = (
@@ -151,8 +157,8 @@ def test_stop_scopes_the_compose_command_to_the_owned_project(
 def test_stop_leaves_the_private_workbench_stack_alone(tmp_path: Path) -> None:
     """The private workbench must survive an AFK uninstall untouched."""
     program_root = _install(tmp_path)
-    # The workbench's own compose project, exactly as Docker reports it on the
-    # development machine where this defect was found.
+    # Another checkout's compose project, shaped the way Docker reports one:
+    # a project also called "localai", distinguished only by its config path.
     listing = (
         _ps_row("deadbeef01", "localai", WORKBENCH_COMPOSE)
         + _ps_row("deadbeef02", "localai", WORKBENCH_COMPOSE)

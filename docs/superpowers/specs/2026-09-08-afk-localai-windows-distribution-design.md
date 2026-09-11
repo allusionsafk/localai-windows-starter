@@ -268,7 +268,10 @@ used without disturbing existing workloads.
 
 ## Non-Goals
 
-- Recreating the private `allusionsafk/localai` installer or workbench.
+- Recreating the private engineering workbench's installer or orchestration
+  layer. That workbench is a separate, unpublished repository; this
+  distribution wraps the scripts and compose definitions it ships here rather
+  than reimplementing that workbench's tooling.
 - Shipping Adaptive Media or ValClip code or runtime dependencies.
 - Bundling large model weights.
 - Automatically editing firmware, BCD, remote Docker contexts, or Windows/Linux
