@@ -393,15 +393,10 @@ function Invoke-EnvironmentPreflight {
         return $result
     }
 
-    $unknownLayers = @(
-        @{ Name = 'FIRMWARE_UNKNOWN'; Status = $firmware.Status }
-        @{ Name = 'WINDOWS_VIRTUALIZATION_UNKNOWN'; Status = $windows.Status }
-        @{ Name = 'WSL_UNKNOWN'; Status = $wsl.Status }
-        @{ Name = 'DOCKER_UNKNOWN'; Status = $docker.Status }
-    ) | Where-Object { $_.Status -eq 'UNKNOWN' }
-
     # Docker's error text contradicting healthy Windows evidence is a genuine
-    # "we do not know", not a Docker-restart problem.
+    # "we do not know", not a Docker-restart problem. This outranks every
+    # blocker below: the layers we believe we know are actively in doubt, not
+    # merely unobserved, so no recovery derived from them is trustworthy.
     $dockerText = "$(Get-PreflightProperty $dockerEvidence 'InfoText' '')"
     $conflict = (
         -not $dockerHealthy -and
@@ -410,25 +405,55 @@ function Invoke-EnvironmentPreflight {
         $dockerText -match $script:PreflightDockerVirtErrorPattern
     )
 
-    if (-not $dockerHealthy -and (@($unknownLayers).Count -gt 0 -or $conflict)) {
+    if (-not $dockerHealthy -and $conflict) {
         $result.Overall = 'UNKNOWN_BLOCKER'
-        $result.Reason = if ($conflict) { 'CONFLICTING_VIRTUALIZATION_EVIDENCE' } else { @($unknownLayers)[0].Name }
+        $result.Reason = 'CONFLICTING_VIRTUALIZATION_EVIDENCE'
         $result.Code = 'PREFLIGHT-UNKNOWN'
         $result.Action = 'report-unknown'
         $result.RebootRequired = ($windows.Status -eq 'WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED')
         return $result
     }
 
-    # Precedence 4: the first known actionable blocker, most actionable first.
-    foreach ($status in $script:PreflightBlockerCodes.Keys) {
-        if ($firmware.Status -eq $status -or $windows.Status -eq $status -or
-            $wsl.Status -eq $status -or $docker.Status -eq $status) {
-            $result.Overall = 'RECOVERABLE_BLOCKER'
-            $result.Reason = $status
-            $result.Code = $script:PreflightBlockerCodes[$status]
-            $result.Action = 'fix-and-rerun'
-            $result.RebootRequired = ($status -in @('WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED'))
-            return $result
+    # Precedence 3/4: walk the prerequisite stack from the bottom up and report
+    # the first layer that is either unobserved or conclusively blocked.
+    #
+    # The layers depend on each other in this order, so a conclusive blocker is
+    # trustworthy exactly when everything BENEATH it is conclusively known - its
+    # recovery rests on those layers. An UNKNOWN ABOVE it says nothing about
+    # whether that recovery is safe or useful, so it must not hide it.
+    #
+    # This is the fix for a real installer run on a developer machine: firmware
+    # READY, Windows virtualization READY, WSL conclusively WSL_UPDATE_REQUIRED,
+    # Docker UNKNOWN. The flat "any unknown layer wins" rule collapsed that to
+    # PREFLIGHT-UNKNOWN / report-unknown, so a user with one safe, bounded,
+    # independently established step was told only that something was unknown.
+    #
+    # Unknown is still a first-class answer; it just no longer borrows authority
+    # from a layer it sits above.
+    if (-not $dockerHealthy) {
+        $layers = @(
+            @{ Unknown = 'FIRMWARE_UNKNOWN';               Status = $firmware.Status }
+            @{ Unknown = 'WINDOWS_VIRTUALIZATION_UNKNOWN'; Status = $windows.Status }
+            @{ Unknown = 'WSL_UNKNOWN';                    Status = $wsl.Status }
+            @{ Unknown = 'DOCKER_UNKNOWN';                 Status = $docker.Status }
+        )
+        foreach ($layer in $layers) {
+            if ($layer.Status -eq 'UNKNOWN') {
+                $result.Overall = 'UNKNOWN_BLOCKER'
+                $result.Reason = $layer.Unknown
+                $result.Code = 'PREFLIGHT-UNKNOWN'
+                $result.Action = 'report-unknown'
+                $result.RebootRequired = ($windows.Status -eq 'WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED')
+                return $result
+            }
+            if ($script:PreflightBlockerCodes.Contains($layer.Status)) {
+                $result.Overall = 'RECOVERABLE_BLOCKER'
+                $result.Reason = $layer.Status
+                $result.Code = $script:PreflightBlockerCodes[$layer.Status]
+                $result.Action = 'fix-and-rerun'
+                $result.RebootRequired = ($layer.Status -eq 'WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED')
+                return $result
+            }
         }
     }
 

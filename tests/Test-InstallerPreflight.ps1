@@ -780,6 +780,188 @@ if (Test-Path -LiteralPath $jsonEntry -PathType Leaf) {
                     $jsonEntryText -match 'Save-InstallerState')
 }
 
+
+# --------------------------------------------------------- layer precedence
+# Regression from a real installer run on this machine. The persisted checkpoint
+# recorded firmware READY, windows_virtualization READY, wsl WSL_UPDATE_REQUIRED
+# and docker UNKNOWN - and the classifier reported PREFLIGHT-UNKNOWN /
+# report-unknown, hiding a conclusive, independently established, safely
+# recoverable WSL step behind an unrelated Docker unknown.
+#
+# The prerequisite layers form a stack: firmware -> Windows virtualization ->
+# WSL -> Docker. A conclusive blocker at a layer is only trustworthy when every
+# layer BENEATH it is conclusively known, because its recovery depends on those.
+# An UNKNOWN ABOVE it says nothing about whether that recovery is safe, so it
+# must not suppress it.
+
+function New-DockerEndpointUnknown {
+    # Exactly what the real run recorded: docker_endpoint_kind "unknown",
+    # so the engine's own state could not be established at all.
+    return [pscustomobject]@{
+        CliFound = $true; DesktopProcessRunning = $false; DockerHostEnv = $null
+        DockerContextEnv = $null; ContextEndpoint = $null
+        InfoExit = $null; InfoOsType = $null; InfoServerVersion = $null
+        InfoText = ''; TimedOut = $false; Error = $null
+    }
+}
+
+function New-WslOutdated {
+    return [pscustomobject]@{
+        CommandFound = $true; VersionExit = 0; VersionText = 'WSL version: 1.2.5.0'
+        TimedOut = $false; Error = $null
+    }
+}
+
+$realRun = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    Wsl = (New-WslOutdated)
+    Docker = (New-DockerEndpointUnknown)
+})
+
+Assert-Equal -Case 'real run: conclusive WSL blocker is not hidden by an unrelated Docker UNKNOWN' `
+    -Expected 'RECOVERABLE_BLOCKER' -Actual $realRun.Overall
+Assert-Equal -Case 'real run: reason names the WSL layer' `
+    -Expected 'WSL_UPDATE_REQUIRED' -Actual $realRun.Reason
+Assert-Equal -Case 'real run: code stays the stable WSL code' `
+    -Expected 'PREFLIGHT-WSL-UPDATE-REQUIRED' -Actual $realRun.Code
+Assert-Equal -Case 'real run: the user is offered a bounded action' `
+    -Expected 'fix-and-rerun' -Actual $realRun.Action
+Assert-Equal -Case 'real run: the Docker layer is still reported UNKNOWN, not invented' `
+    -Expected 'UNKNOWN' -Actual $realRun.Docker.Status
+
+# An unknown BENEATH the blocker still wins: the blocker's own prerequisites are
+# unproven, so its recovery is not established as useful.
+$unknownBelow = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    Firmware = [pscustomobject]@{ Values = @(); Queried = $false; Error = 'rpc unavailable' }
+    WindowsVirtualization = (New-WinVirt -Hypervisor $null)
+    Wsl = (New-WslOutdated)
+    Docker = (New-DockerEndpointUnknown)
+})
+Assert-Equal -Case 'an UNKNOWN beneath a blocker still outranks it' `
+    -Expected 'UNKNOWN_BLOCKER' -Actual $unknownBelow.Overall
+Assert-Equal -Case 'and it names the lowest unknown layer' `
+    -Expected 'FIRMWARE_UNKNOWN' -Actual $unknownBelow.Reason
+
+# The lowest conclusive blocker wins over a higher conclusive blocker.
+$twoBlockers = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    WindowsVirtualization = (New-WinVirt -Hypervisor $true -Features @{
+        'VirtualMachinePlatform' = 'Disabled'; 'Microsoft-Windows-Subsystem-Linux' = 'Enabled' })
+    Wsl = (New-WslOutdated)
+    Docker = (New-DockerAbsent)
+})
+Assert-Equal -Case 'the lowest conclusive blocker is reported first' `
+    -Expected 'WINDOWS_VIRTUALIZATION_FEATURE_MISSING' -Actual $twoBlockers.Reason
+
+# Docker UNKNOWN with every layer beneath it READY is still honestly UNKNOWN:
+# there is no lower blocker to surface instead.
+$dockerOnly = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    Docker = (New-DockerEndpointUnknown)
+})
+Assert-Equal -Case 'Docker UNKNOWN alone remains UNKNOWN_BLOCKER' `
+    -Expected 'UNKNOWN_BLOCKER' -Actual $dockerOnly.Overall
+Assert-Equal -Case 'Docker UNKNOWN alone names the Docker layer' `
+    -Expected 'DOCKER_UNKNOWN' -Actual $dockerOnly.Reason
+Assert-Equal -Case 'Docker UNKNOWN alone offers no machine change' `
+    -Expected 'report-unknown' -Actual $dockerOnly.Action
+
+# Contradictory virtualization evidence must still outrank a lower blocker:
+# there the layers beneath are actively in doubt, not merely unobserved.
+$contradiction = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    Wsl = (New-WslOutdated)
+    Docker = [pscustomobject]@{
+        CliFound = $true; DesktopProcessRunning = $true; DockerHostEnv = $null
+        DockerContextEnv = $null; ContextEndpoint = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+        InfoExit = 1; InfoOsType = $null; InfoServerVersion = $null
+        InfoText = 'virtualization support is disabled in the BIOS'
+        TimedOut = $false; Error = $null }
+})
+Assert-Equal -Case 'contradictory virtualization evidence still outranks a lower blocker' `
+    -Expected 'CONFLICTING_VIRTUALIZATION_EVIDENCE' -Actual $contradiction.Reason
+
+# A reboot-required blocker must keep carrying the reboot flag through the walk.
+$rebootBlocker = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    # Hypervisor not yet running is what makes a pending reboot coherent: once
+    # it is running, the change has already taken effect.
+    WindowsVirtualization = (New-WinVirt -Hypervisor $false -PendingReboot $true)
+    Wsl = (New-WslOutdated)
+    Docker = (New-DockerEndpointUnknown)
+})
+Assert-Equal -Case 'a pending reboot beneath WSL is reported instead of the WSL step' `
+    -Expected 'WINDOWS_VIRTUALIZATION_REBOOT_REQUIRED' -Actual $rebootBlocker.Reason
+Assert-True -Case 'and it still requires a restart' -Condition $rebootBlocker.RebootRequired
+
+# A proven healthy local engine still short-circuits everything beneath it.
+$healthyWithOldWsl = Invoke-EnvironmentPreflight -Evidence (New-Evidence @{
+    Wsl = (New-WslOutdated)
+})
+Assert-Equal -Case 'a proven healthy local engine still vouches for the layers beneath it' `
+    -Expected 'READY' -Actual $healthyWithOldWsl.Overall
+
+
+# -------------------------------------- evidence probes on Windows PowerShell 5.1
+# Regression from a real first run. ProcessStartInfo.ArgumentList does not exist
+# on .NET Framework, so on Windows PowerShell 5.1 - which is exactly what the
+# shell launches the environment preflight with, deliberately, so the check can
+# run before pwsh is installed - `$psi.ArgumentList.Add()` threw and every probe
+# that passed arguments came back as exit 1 with the text
+# "You cannot call a method on a null-valued expression."
+#
+# The classifier then read that faithfully: `wsl --version` looked like a
+# non-zero exit (so WSL looked outdated), Docker's endpoint looked unresolvable,
+# and a machine that was actually READY was told PREFLIGHT-UNKNOWN.
+
+Write-Host '-- argument quoting' -ForegroundColor Cyan
+
+Assert-Equal -Case 'a plain argument is not quoted' `
+    -Expected 'start' -Actual (ConvertTo-AiArgumentString -Arguments @('start'))
+Assert-Equal -Case 'arguments are separated by a single space' `
+    -Expected '-Json -DataRoot' -Actual (ConvertTo-AiArgumentString -Arguments @('-Json', '-DataRoot'))
+Assert-Equal -Case 'an argument containing a space is quoted as one argument' `
+    -Expected '"C:\Program Files\x"' -Actual (ConvertTo-AiArgumentString -Arguments @('C:\Program Files\x'))
+Assert-Equal -Case 'a trailing backslash before the closing quote is doubled' `
+    -Expected '"C:\dir with space\\"' -Actual (ConvertTo-AiArgumentString -Arguments @('C:\dir with space\'))
+Assert-Equal -Case 'an embedded quote is escaped' `
+    -Expected '"say \"hi\""' -Actual (ConvertTo-AiArgumentString -Arguments @('say "hi"'))
+Assert-Equal -Case 'an empty argument survives as an empty quoted argument' `
+    -Expected '""' -Actual (ConvertTo-AiArgumentString -Arguments @(''))
+Assert-Equal -Case 'no arguments produce an empty command line' `
+    -Expected '' -Actual (ConvertTo-AiArgumentString -Arguments @())
+
+Write-Host '-- probes actually pass arguments on Windows PowerShell 5.1' -ForegroundColor Cyan
+
+$windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
+    Assert-True -Case 'Windows PowerShell 5.1 probe (skipped: host not present)' -Condition $true
+} else {
+    $probe = Join-Path ([IO.Path]::GetTempPath()) ("afk-argprobe-" + [guid]::NewGuid().ToString('n') + ".ps1")
+    $common = Join-Path $Root 'ai-common.ps1'
+    @"
+. '$common'
+`$result = Invoke-AiProcess -FilePath 'cmd.exe' -ArgumentList @('/c', 'exit', '7') -TimeoutSec 60
+Write-Output "EXIT=`$(`$result.Code)"
+Write-Output "TEXT=`$(`$result.Text)"
+`$psv = Invoke-AiProcess -FilePath 'cmd.exe' -ArgumentList @('/c', 'echo', 'AFK-MARKER') -TimeoutSec 60
+Write-Output "ECHO_EXIT=`$(`$psv.Code)"
+Write-Output "ECHO_TEXT=`$(`$psv.Text)"
+"@ | Set-Content -LiteralPath $probe -Encoding UTF8
+
+    try {
+        $output = & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $probe 2>&1
+        $lines = @($output | ForEach-Object { "$_" })
+        $exitLine = @($lines | Where-Object { $_ -like 'EXIT=*' } | Select-Object -First 1)
+        $textLine = @($lines | Where-Object { $_ -like 'TEXT=*' } | Select-Object -First 1)
+        $echoLine = @($lines | Where-Object { $_ -like 'ECHO_TEXT=*' } | Select-Object -First 1)
+
+        Assert-Equal -Case 'arguments reach the child process on Windows PowerShell 5.1' `
+            -Expected 'EXIT=7' -Actual "$exitLine"
+        Assert-True -Case 'no null-valued-expression error on Windows PowerShell 5.1' `
+            -Condition ("$textLine" -notmatch 'null-valued expression') "$textLine"
+        Assert-True -Case 'child output is captured on Windows PowerShell 5.1' `
+            -Condition ("$echoLine" -match 'AFK-MARKER') "$echoLine"
+    } finally {
+        Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ---------------------------------------------------------------- summary
 
 Write-Host ''

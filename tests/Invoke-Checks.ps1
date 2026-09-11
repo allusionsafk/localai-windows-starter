@@ -124,6 +124,22 @@ if (Test-Path -LiteralPath $preflightTests) {
     Add-Result 'Installer preflight tests' $true 'SKIPPED (Test-InstallerPreflight.ps1 not in this checkout)'
 }
 
+# 6b2. First-run state machine: machine evidence -> diagnosis -> bounded
+#      recovery -> checkpoint -> resume, as a transition matrix.
+$transitionTests = Join-Path $PSScriptRoot 'Test-FirstRunTransitions.ps1'
+if (Test-Path -LiteralPath $transitionTests) {
+    $pwshPath = (Get-Process -Id $PID).Path
+    $trOut = & $pwshPath -NoProfile -ExecutionPolicy Bypass -File $transitionTests 2>&1
+    $trOk = ($LASTEXITCODE -eq 0)
+    $trLines = @($trOut | ForEach-Object { "$_" })
+    $trSummary = @($trLines | Where-Object { $_ -match 'FIRST-RUN TRANSITION TESTS' } | Select-Object -First 1)
+    $trDetail = if ($trSummary) { "$($trSummary[0])".Trim() } else { ($trLines | Select-Object -Last 1) }
+    if (-not $trOk) { $trDetail = (@($trLines | Select-Object -Last 12) -join ' | ') }
+    Add-Result 'First-run transition matrix' $trOk $trDetail
+} else {
+    Add-Result 'First-run transition matrix' $true 'SKIPPED (Test-FirstRunTransitions.ps1 not in this checkout)'
+}
+
 # 6c. Bounded prerequisite recovery mapping, state, and event protocol.
 $recoveryTests = Join-Path $PSScriptRoot 'Test-InstallerRecovery.ps1'
 if (Test-Path -LiteralPath $recoveryTests) {
