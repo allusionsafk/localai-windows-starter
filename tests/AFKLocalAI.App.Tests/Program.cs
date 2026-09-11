@@ -112,6 +112,11 @@ try
     Check("uninstall stop runs the payload ownership entry point",
         stopSpec.Arguments.Any(argument => argument.EndsWith(
             Path.Combine("installer", "afk-stop.py"), StringComparison.OrdinalIgnoreCase)), stopArguments);
+    // Regression: importing the payload writes __pycache__ into the program
+    // directory. Setup never installed those files, so its uninstaller never
+    // removes them - and the whole installation survives the uninstall.
+    Check("uninstall stop writes no bytecode into the installation",
+        stopSpec.Arguments.Contains("-B"), stopArguments);
     Check("uninstall stop passes this installation's program root",
         stopSpec.Arguments.Contains("--program-root") &&
         stopSpec.Arguments[stopSpec.Arguments.ToList().IndexOf("--program-root") + 1] == paths.ProgramRoot,

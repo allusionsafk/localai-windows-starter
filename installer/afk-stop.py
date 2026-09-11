@@ -21,6 +21,12 @@ SyntaxError during an uninstall.
 import os
 import sys
 
+# Importing the payload would otherwise leave __pycache__/*.pyc inside the
+# installation directory. Setup never installed those files, so its uninstaller
+# never removes them - and the whole program directory survives the uninstall.
+# This must be set before the payload is imported.
+sys.dont_write_bytecode = True
+
 MINIMUM_PYTHON = (3, 12)
 REFUSAL = "Refusing to stop shared, unrelated, or unproven resources."
 

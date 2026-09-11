@@ -37,10 +37,16 @@ public sealed class ProvisioningController
     /// by path, resolves this installation's own code, and refuses to act when
     /// ownership cannot be proven.
     /// </remarks>
+    /// <remarks>
+    /// "-B" keeps the interpreter from writing __pycache__ into the program
+    /// directory: Setup never installed those files, so its uninstaller never
+    /// removes them, and the whole installation would survive an uninstall.
+    /// </remarks>
     public ProcessSpec Stop() => ProcessSpec.Hidden(
         "py.exe",
         new[]
         {
+            "-B",
             Path.Combine(_paths.ProgramRoot, "installer", "afk-stop.py"),
             "--program-root", _paths.ProgramRoot
         },

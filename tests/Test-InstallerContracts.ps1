@@ -139,6 +139,11 @@ if (Test-Path -LiteralPath $controllerPath) {
       $stopText -match [regex]::Escape('"afk-stop.py"'))
     Assert-True 'uninstall stop passes an explicit program root' (
       $stopText -match [regex]::Escape('"--program-root"'))
+    # Importing the payload writes __pycache__ into the program directory.
+    # Setup never installed those files, so its uninstaller never removes them,
+    # and the installation survives the uninstall.
+    Assert-True 'uninstall stop leaves no bytecode behind' (
+      $stopText -match [regex]::Escape('"-B"'))
   }
 }
 
@@ -153,6 +158,8 @@ if (Test-Path -LiteralPath $stopEntryPath) {
   Assert-True 'stop entry point refuses rather than guessing' (
     $stopEntry -match 'Refusing to stop shared')
   Assert-True 'stop entry point never fails an uninstall' ($stopEntry -match 'return 0')
+  Assert-True 'stop entry point writes no bytecode into the installation' (
+    $stopEntry -match 'sys\.dont_write_bytecode\s*=\s*True')
 }
 
 if (Test-Path -LiteralPath $ownershipPath) {
