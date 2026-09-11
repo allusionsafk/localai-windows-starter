@@ -1,286 +1,152 @@
-# AFK AI for Windows
+# AFK LocalAI for Windows
 
-> **Friend Beta 0.1.7rc1** · local-first AI for Windows 11
+> Friend Beta `0.2.0-rc1` · a guided, local-first AI workspace for Windows 11
 
-AFK AI turns a Windows PC into a private, self-hosted AI workspace built around
-**Ollama**, **Open WebUI**, **SearXNG**, and local voice.
+AFK LocalAI installs a private AI workspace built around Ollama, Open WebUI,
+SearXNG, and local voice. The normal distribution is one Windows installer:
 
-Your model inference and Open WebUI chat history stay on your machine. Setup,
-model downloads, updates, and optional web search can use the internet.
+```text
+AFKLocalAISetup-0.2.0-rc1-x64.exe
+```
 
-**[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)** ·
-[Support](SUPPORT.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+No repository clone, developer tools, manual PowerShell, or PATH editing is
+part of the supported user path.
 
-## At a glance
-
-| | |
-|---|---|
-| **Status** | Friend Beta `0.1.7rc1` |
-| **Primary target** | Windows 11 with an NVIDIA GPU |
-| **CPU-only fallback** | Supported with smaller models, but slow |
-| **Chat** | Open WebUI at `http://localhost:3000` |
-| **Optional web search** | SearXNG at `http://localhost:8080` |
-| **Model runtime** | Ollama on the Windows host |
-| **License** | MIT |
+[Support](SUPPORT.md) · [Security](SECURITY.md) ·
+[Release candidate notes](docs/releases/0.2.0-rc1.md) ·
+[Install, upgrade, and uninstall](docs/install-upgrade-uninstall.md)
 
 > [!IMPORTANT]
-> Friend Beta is still proving the clean-machine install path. The current
-> installer does not yet classify every virtualization, WSL, and Docker blocker
-> early enough. If setup reaches one of those blockers, keep the exact error
-> text instead of guessing at system changes.
+> `0.2.0-rc1` is a prerelease candidate. Only an asset attached to the matching
+> GitHub prerelease with its `.sha256.txt` file should be shared with testers.
+> A source checkout or locally rebuilt EXE is not the published candidate.
 
-## Start here
+## Install
 
-### 1. Download
+1. Download `AFKLocalAISetup-0.2.0-rc1-x64.exe` from the matching AFK LocalAI
+   GitHub prerelease.
+2. Double-click the installer.
+3. Keep the default per-user location and optionally choose a Desktop shortcut.
+4. Leave **Launch AFK LocalAI** selected.
+5. Follow the setup screen until AFK LocalAI reports that the local workspace
+   is ready.
 
-Open the **[AFK AI website](https://localai-windows-starter-site.allusionsafk.workers.dev/)**
-and choose **Download AFK AI for Windows**.
+Windows may show an unsigned-app warning during Friend Beta. Do not disable
+Defender, Smart App Control, antivirus, or UAC to bypass a block. Confirm that
+the downloaded file has the SHA-256 published beside the release asset, or ask
+the tester coordinator for a newly qualified build.
 
-The website serves a pinned Friend Beta installer only after verifying its
-SHA-256. It does not use GitHub `releases/latest` as the download source.
+## Guided first run
 
-> [!NOTE]
-> This repository's GitHub **Releases** page also contains Adaptive Media
-> installer artefacts from separate media-tooling work. Those release names and
-> version numbers are not AFK AI versions. For AFK AI, the website pin and
-> [`docs/releases/0.1.7rc1.md`](docs/releases/0.1.7rc1.md) are the authoritative
-> Friend Beta references.
+AFK LocalAI checks the machine before it downloads models or changes the local
+runtime. The setup screen reports:
 
-The pinned repository blob remains named **`Install Local AI.cmd`** for source
-and compatibility continuity. The website verifies those exact bytes and saves
-them to the browser as **`Install AFK AI.cmd`**, which is the customer-facing
-product filename. If you cloned this repository instead of using the website,
-run the source file under its repository name.
+- Windows version and architecture
+- firmware virtualization capability and current Windows virtualization state
+- WSL installation, version, health, and restart requirements
+- Docker Desktop installation, engine state, context, and container mode
+- GPU, VRAM, CPU, memory, and supported model tier
+- conflicting or damaged prior AFK LocalAI state
 
-### 2. Run
+When a prerequisite is missing, the app presents one bounded recovery action
+or a precise manual instruction. Potentially disruptive firmware, boot,
+container-mode, and Docker-context changes are never made silently.
 
-If you downloaded from the website, double-click **`Install AFK AI.cmd`** and
-follow the prompts.
+Setup checkpoints progress under `%LOCALAPPDATA%\AFK LocalAI\State`. After a
+restart or partial failure, launch AFK LocalAI again and choose **Resume setup**
+or **Try again**. Every resume starts with a fresh environment check; saved
+state never overrides what Windows currently reports.
 
-Windows may warn about the unsigned Friend Beta script. You can inspect it in
-Notepad before running it.
+## Supported Friend Beta path
 
-> [!NOTE]
-> If Smart App Control blocks the installer without offering a normal run path,
-> do not disable Smart App Control just for the beta. Use the inspectable
-> PowerShell bootstrap path below instead.
+| Item | Support |
+|---|---|
+| Operating system | Windows 11 x64, build 22000 or newer |
+| Accelerated runtime | NVIDIA GPU recommended |
+| CPU-only | Supported with smaller models; substantially slower |
+| Containers | Local Docker Desktop Linux-container engine |
+| Windows Linux layer | Healthy WSL 2 where required by Docker Desktop |
+| Model runtime | Ollama for Windows |
+| Disk | About 40 GB recommended for a comfortable first setup |
 
-### 3. Open chat
+Docker Hub sign-in is not required for the local stack. Models are not embedded
+in the installer; setup downloads only the runtime and models selected for the
+machine.
 
-When setup completes, open:
+## After installation
 
-```text
-http://localhost:3000
-```
+AFK LocalAI appears in the Start Menu with shortcuts for:
 
-The first Open WebUI account you create becomes the local owner/admin account.
-It is stored in Open WebUI's local database. It is not an AFK AI cloud account.
+- AFK LocalAI
+- Diagnostics
+- Data Folder
+- About AFK LocalAI
+- Support
+- Uninstall AFK LocalAI
 
-After installation, the install folder contains:
+The application is installed per user at
+`%LOCALAPPDATA%\Programs\AFK LocalAI`. User state, logs, and diagnostics live at
+`%LOCALAPPDATA%\AFK LocalAI`, outside the replaceable program directory.
 
-```text
-Start Local AI.cmd
-Stop Local AI.cmd
-```
+Open WebUI is available at `http://localhost:3000` after provisioning succeeds.
+The first Open WebUI account is the local owner account; it is not an AFK cloud
+account.
 
-## What AFK AI runs
+## Privacy and network boundary
 
-| Service | Local endpoint | Purpose |
-|---|---|---|
-| **Open WebUI** | `127.0.0.1:3000` | Chat interface |
-| **SearXNG** | `127.0.0.1:8080` | Optional web search |
-| **Control Center** | `127.0.0.1:8765` | Local health and diagnostics |
-| **Kokoro TTS** | `127.0.0.1:8880` | Local neural voice |
-| **Ollama** | host port `11434` | Native Windows model runtime |
+AFK LocalAI is local-first, not permanently offline.
 
-Open WebUI, SearXNG, and the other Docker-published user-facing services use
-loopback endpoints. Ollama runs natively on Windows so it can use the GPU
-directly.
-
-## Privacy without vague promises
-
-AFK AI is **local-first**, not "the internet is never used."
-
-**Stays local by design**
+Local by design:
 
 - model inference through local Ollama
-- Open WebUI's local account and chat database
-- user-facing UI, search, voice, and Control Center endpoints on loopback
-- diagnostics designed to exclude chats, prompts, documents, credentials, and
-  file contents
+- Open WebUI account and chat storage
+- user-facing web services on loopback endpoints
+- diagnostics intended to exclude chats, prompts, documents, and credentials
 
-**Can use the internet**
+Internet access can occur for software and model downloads, updates, web
+searches you enable, and integrations you choose. Ollama uses a
+Docker-reachable Windows host bind so local containers can reach it; AFK
+LocalAI later applies the documented firewall guardrail where supported.
 
-- software and model downloads
-- updates
-- web searches you explicitly enable
-- optional online integrations you choose
+## Upgrade and uninstall
 
-### Network boundary
+Install a newer AFK LocalAI EXE normally. The stable application identity makes
+Inno Setup replace program files and registration in place while preserving
+`%LOCALAPPDATA%\AFK LocalAI`.
 
-Ollama deliberately uses a Docker-reachable Windows host bind so the containers
-can reach it. The installer later attempts to apply a Windows Firewall guardrail
-for AFK AI ports on physical Wi-Fi and Ethernet adapters.
+Uninstall from Windows **Installed apps** or the Start Menu. Uninstall stops the
+AFK LocalAI runtime and removes the application shell, shortcuts, and uninstall
+entry. It intentionally preserves user state for recovery or reinstall. See
+[Install, upgrade, and uninstall](docs/install-upgrade-uninstall.md) for the
+exact boundary and optional manual data removal.
 
-Remote access is separate and opt-in. The included Tailscale helper is not
-enabled automatically.
+## Diagnostics and support
 
-For the complete public security boundary and private vulnerability reporting,
-see **[SECURITY.md](SECURITY.md)**.
+Open **Start Menu → AFK LocalAI → Diagnostics**. AFK LocalAI creates a timestamped
+report under `%LOCALAPPDATA%\AFK LocalAI\Diagnostics`, redacts the current user
+profile path, and opens the folder. Review the report before attaching it to an
+issue.
 
-## What the installer does
+Never share `.env` contents, tokens, credentials, chats, prompts, documents, or
+unrelated machine information. Follow [SUPPORT.md](SUPPORT.md) for a useful
+Friend Beta report.
 
-The guided path is intended to become:
+## Contributor validation
 
-```text
-download
-  -> verify pinned payload
-  -> check the Windows environment
-  -> inspect hardware
-  -> choose a fitting model
-  -> install supported prerequisites
-  -> configure the local stack
-  -> run health checks
-  -> open local chat
-```
-
-Today, the virtualization, WSL, and Docker preflight is still incomplete.
-A real Friend Beta clean-machine run reached Docker Desktop before the actual
-Windows virtualization blocker became clear. The next installer milestone is
-the early, resumable preflight described in
-[`docs/design/virtualization-docker-preflight.md`](docs/design/virtualization-docker-preflight.md).
-
-## Requirements
-
-Current Friend Beta target:
-
-- Windows 11
-- hardware virtualization enabled for the Docker path
-- NVIDIA GPU recommended
-- roughly 40 GB of free disk for a comfortable first install
-- Docker Desktop
-- Ollama for Windows
-- Python 3.12+
-- PowerShell 7, which the bootstrapper can install when missing
-
-CPU-only machines can use smaller models. Expect much slower generation.
-
-## PowerShell bootstrap
-
-If you prefer to inspect and launch the current bootstrap directly:
+The public repository is the source of truth for the Windows distribution. The
+private engineering workbench does not carry a second installer.
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/allusionsafk/localai-windows-starter/master/installer/bootstrap.ps1 -OutFile "$env:TEMP\localai-bootstrap.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\localai-bootstrap.ps1"
+python -m pip install -e ".[dev]"
+pwsh -File scripts\Test-DistributionContracts.ps1
+pwsh -File scripts\Build-Installer.ps1
 ```
 
-> [!IMPORTANT]
-> The command above fetches `bootstrap.ps1` from the mutable `master` branch. It
-> is therefore **not equivalent to the website's pinned Friend Beta download**.
-> The bootstrap verifies the repository payload it subsequently downloads
-> against its expected commit/archive hash, but this first bootstrap fetch is
-> not independently pinned by that command. Use the website download when you
-> want the published Friend Beta trust boundary rather than the current-source
-> bootstrap path.
+Release candidates are built once on Windows, tested through clean install,
+upgrade, installed self-test, and uninstall, then uploaded with a SHA-256 and
+lifecycle evidence. Publishing is a separate no-rebuild workflow.
 
-From an existing checkout:
-
-```powershell
-# PowerShell 7
-pwsh -ExecutionPolicy Bypass -File installer\bootstrap.ps1
-
-# Windows PowerShell 5.1
-powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1
-```
-
-When run, the bootstrap verifies the downstream repository payload against the
-expected tag commit or source archive hash before executing that payload.
-
-The `-ExecutionPolicy Bypass` shown here applies to this process invocation. It
-does not permanently change the user's PowerShell execution policy.
-
-## Control CLI
-
-AFK AI currently retains the internal `localai` package and command name.
-
-| Command | Purpose |
-|---|---|
-| `localai vet [--json]` | Inspect hardware and capability tier |
-| `localai start` | Start the local stack |
-| `localai stop` | Stop the local stack |
-| `localai health` | Check Ollama, services, and search |
-| `localai dashboard` | Open the local Control Center |
-| `localai model-scout` | Recommend models for the machine |
-| `localai warm` | Warm models |
-| `localai perf` | Show performance information |
-| `localai firewall` | Apply local network guardrails |
-| `localai update` | Update supported runtime assets |
-| `localai public-audit --strict` | Scan for machine-specific public leaks |
-
-Run `localai --help` for the complete command list.
-
-## Hardware-aware model fitting
-
-The installer does not assume one reference GPU. Model Scout uses the detected
-hardware to select a bounded model/context combination.
-
-Current broad tiers:
-
-| Tier | VRAM | Typical target |
-|---|---:|---|
-| S | 16 GB+ | larger local models |
-| A | 12 GB | high-quality mid-size models |
-| B | 8 GB | balanced local models |
-| C | 4 GB | compact models |
-| CPU | none | small models with slow generation |
-
-Actual memory use depends on model architecture, quantization, context length,
-KV cache, runtime overhead, and CPU offload. A model that technically loads can
-still be a poor recommendation if it leaves too little headroom.
-
-## Manual development bring-up
-
-For contributors and people who want to work from source:
-
-```powershell
-pip install -e .
-copy .env.example .env
-localai start
-localai health
-```
-
-Set a strong `SEARXNG_SECRET` in `.env` before using the search stack.
-
-## Documentation
-
-| Document | What it covers |
-|---|---|
-| [Documentation index](docs/README.md) | End-user, release, design, and engineering-document hierarchy |
-| [Support](SUPPORT.md) | Friend Beta support scope and useful bug reports |
-| [Security](SECURITY.md) | Private vulnerability reporting and privacy boundary |
-| [Contributing](CONTRIBUTING.md) | Contribution scope and test expectations |
-| [Friend Beta notes](docs/releases/0.1.7rc1.md) | Release-candidate truth and known limitations |
-| [Installer guide](installer/README.md) | Bootstrap and installer architecture |
-| [WebBrain guide](docs/webbrain.md) | Browser automation with a local model |
-| [Preflight design](docs/design/virtualization-docker-preflight.md) | Next installer recovery contract |
-
-## Platform direction
-
-Windows 11 with NVIDIA CUDA is the current supported Friend Beta path.
-
-Apple Silicon, Windows ARM64, Linux ARM64, NPUs, AMD acceleration, and other
-backends are evaluation or future-validation work. They are not advertised as
-supported until installation, chat, health, recovery, and uninstall are proven
-on real hardware.
-
-## Project naming
-
-**AFK AI** is the product name.
-
-The repository and internal Python package still use `localai` for continuity.
-This project is not affiliated with or endorsed by mudler/LocalAI or
-localai.io.
-
-## License
+The internal Python package and CLI retain the `localai` name for compatibility.
+AFK LocalAI is not affiliated with or endorsed by mudler/LocalAI or localai.io.
 
 MIT licensed. See [LICENSE](LICENSE).
