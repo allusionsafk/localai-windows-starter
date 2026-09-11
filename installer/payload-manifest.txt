@@ -24,7 +24,7 @@ docker-compose.yml
 installer/Get-Preflight.ps1
 installer/Install-LocalAI.ps1
 installer/Invoke-Recovery.ps1
-installer/afk-stop.py
+installer/afk-payload.py
 installer/installer-common.ps1
 installer/preflight.ps1
 installer/recovery.ps1

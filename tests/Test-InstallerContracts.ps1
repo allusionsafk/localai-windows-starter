@@ -153,41 +153,65 @@ Write-Host '-- uninstall ownership contract' -ForegroundColor Cyan
 # force-closed Docker Desktop and Ollama machine-wide.
 $controllerPath = Require-File 'src/AFKLocalAI.App/ProvisioningController.cs'
 $ownershipPath = Require-File 'src/localai/afk_ownership.py'
-$stopEntryPath = Require-File 'installer/afk-stop.py'
+$entryPointPath = Require-File 'installer/afk-payload.py'
 
 if (Test-Path -LiteralPath $controllerPath) {
   $controller = Get-ContractText -Path $controllerPath
-  $stopMember = [regex]::Match($controller, '(?s)public ProcessSpec Stop\(\).*?;')
-  Assert-True 'app exposes a Stop command' $stopMember.Success
-  if ($stopMember.Success) {
-    $stopText = $stopMember.Value
-    Assert-True 'uninstall stop does not invoke the ambient localai package' (
-      $stopText -notmatch '"localai"' -and $stopText -notmatch 'Python\(')
-    Assert-True 'uninstall stop runs the payload ownership entry point' (
-      $stopText -match [regex]::Escape('"afk-stop.py"'))
-    Assert-True 'uninstall stop passes an explicit program root' (
-      $stopText -match [regex]::Escape('"--program-root"'))
+  # Every Python-facing command must go through the verified payload entry
+  # point. Start and Health once routed through the ambient name too: quieter
+  # than the destructive Stop, but just as wrong - the installed product would
+  # operate, and report on, whichever checkout won Python resolution.
+  Assert-True 'app never invokes the ambient localai package' (
+    $controller -notmatch '"-m"\s*,\s*"localai"' -and
+    $controller -notmatch '"localai"' -and
+    $controller -notmatch '"-3\.12"')
+  foreach ($command in @('Start', 'Stop', 'Health')) {
+    $member = [regex]::Match($controller, "(?s)public ProcessSpec $command\(\).*?;")
+    Assert-True "app exposes a $command command" $member.Success
+    if ($member.Success) {
+      Assert-True "$command routes through the verified payload entry point" (
+        $member.Value -match 'Payload\(')
+    }
+  }
+  $payloadMember = [regex]::Match($controller, '(?s)private ProcessSpec Payload\(.*?\n    \}')
+  Assert-True 'app has one payload invocation helper' $payloadMember.Success
+  if ($payloadMember.Success) {
+    $payloadText = $payloadMember.Value
+    Assert-True 'payload commands run the by-path entry point' (
+      $payloadText -match [regex]::Escape('"afk-payload.py"'))
+    Assert-True 'payload commands pass an explicit program root' (
+      $payloadText -match [regex]::Escape('"--program-root"'))
     # Importing the payload writes __pycache__ into the program directory.
     # Setup never installed those files, so its uninstaller never removes them,
     # and the installation survives the uninstall.
-    Assert-True 'uninstall stop leaves no bytecode behind' (
-      $stopText -match [regex]::Escape('"-B"'))
+    Assert-True 'payload commands leave no bytecode behind' (
+      $payloadText -match [regex]::Escape('"-B"'))
   }
 }
 
-if (Test-Path -LiteralPath $stopEntryPath) {
-  $stopEntry = Get-ContractText -Path $stopEntryPath
-  Assert-True 'stop entry point resolves the payload package by path' (
-    $stopEntry -match 'sys\.path\.insert' -and $stopEntry -match '"src"')
-  Assert-True 'stop entry point discards an already-imported localai' (
-    $stopEntry -match 'del sys\.modules')
-  Assert-True 'stop entry point proves which package answered the import' (
-    $stopEntry -match '__file__' -and $stopEntry -match 'startswith')
-  Assert-True 'stop entry point refuses rather than guessing' (
-    $stopEntry -match 'Refusing to stop shared')
-  Assert-True 'stop entry point never fails an uninstall' ($stopEntry -match 'return 0')
-  Assert-True 'stop entry point writes no bytecode into the installation' (
-    $stopEntry -match 'sys\.dont_write_bytecode\s*=\s*True')
+if (Test-Path -LiteralPath $entryPointPath) {
+  $entry = Get-ContractText -Path $entryPointPath
+  Assert-True 'entry point resolves the payload package by path' (
+    $entry -match 'sys\.path\.insert' -and $entry -match '"src"')
+  Assert-True 'entry point discards an already-imported localai' (
+    $entry -match 'del sys\.modules')
+  Assert-True 'entry point proves which package answered the import' (
+    $entry -match '__file__' -and $entry -match 'startswith')
+  Assert-True 'entry point refuses rather than guessing' (
+    $entry -match 'Refusing to act')
+  Assert-True 'entry point writes no bytecode into the installation' (
+    $entry -match 'sys\.dont_write_bytecode\s*=\s*True')
+  Assert-True 'entry point serves stop, start and health' (
+    $entry -match [regex]::Escape('COMMANDS = ("stop", "start", "health")'))
+  # An uninstall must never fail; a Start or Health that did nothing must never
+  # report success.
+  Assert-True 'a refused uninstall still succeeds' (
+    $entry -match '"stop"\s*:\s*0')
+  Assert-True 'a refused start reports failure' (
+    $entry -match '"start"\s*:\s*[1-9]')
+  Assert-True 'a refused health reports failure' (
+    $entry -match '"health"\s*:\s*[1-9]')
+  Assert-True 'unknown commands fail closed' ($entry -match 'Usage:')
 }
 
 if (Test-Path -LiteralPath $ownershipPath) {
@@ -226,8 +250,8 @@ if (Test-Path -LiteralPath $manifestPath) {
   $ownershipEntries = @(Get-Content -LiteralPath $manifestPath | ForEach-Object { $_.Trim() })
   Assert-True 'payload ships the ownership module' (
     $ownershipEntries -contains 'src/localai/afk_ownership.py')
-  Assert-True 'payload ships the stop entry point' (
-    $ownershipEntries -contains 'installer/afk-stop.py')
+  Assert-True 'payload ships the entry point' (
+    $ownershipEntries -contains 'installer/afk-payload.py')
 }
 
 Write-Host ''

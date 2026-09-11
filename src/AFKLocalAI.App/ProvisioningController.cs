@@ -21,39 +21,45 @@ public sealed class ProvisioningController
         "-Resume", "-AcceptDefaults", "-DataRoot", _paths.StateRoot,
         "-LegacyInstallRoot", _paths.LegacyInstallRoot, "-EventStream");
 
-    public ProcessSpec Start() => Python("start", "start");
+    public ProcessSpec Start() => Payload("start");
+
+    /// <summary>Stops only what this installation can prove it owns.</summary>
+    public ProcessSpec Stop() => Payload("stop");
+
+    public ProcessSpec Health() => Payload("health");
 
     /// <summary>
-    /// Stops only what this installation can prove it owns.
+    /// Runs one command against THIS installation's own Python payload.
     /// </summary>
     /// <remarks>
-    /// Deliberately NOT "py -m localai stop". That command resolves through the
+    /// Deliberately NOT "py -m localai &lt;command&gt;". That resolves through the
     /// ambient <c>localai</c> package name, so on a machine that also has the
     /// private engineering workbench installed editable it runs the workbench's
-    /// code against the workbench's repository root - unloading Ollama models,
-    /// tearing down the workbench's compose project, and force-closing Docker
-    /// Desktop and Ollama for the whole machine. The uninstaller runs this, so it
-    /// must never be able to do any of that. The payload script below is invoked
-    /// by path, resolves this installation's own code, and refuses to act when
-    /// ownership cannot be proven.
-    /// </remarks>
-    /// <remarks>
+    /// code against the workbench's repository root. For Stop that was
+    /// destructive - it tore down the workbench's compose project and
+    /// force-closed Docker Desktop and Ollama for the whole machine. For Start
+    /// and Health it is quieter but just as wrong: this product would operate,
+    /// and report on, somebody else's stack. The entry point below is invoked by
+    /// path, proves which package answered the import, and refuses rather than
+    /// guessing.
+    /// <para>
     /// "-B" keeps the interpreter from writing __pycache__ into the program
     /// directory: Setup never installed those files, so its uninstaller never
     /// removes them, and the whole installation would survive an uninstall.
+    /// </para>
     /// </remarks>
-    public ProcessSpec Stop() => ProcessSpec.Hidden(
+    private ProcessSpec Payload(string command) => ProcessSpec.Hidden(
         "py.exe",
         new[]
         {
             "-B",
-            Path.Combine(_paths.ProgramRoot, "installer", "afk-stop.py"),
+            Path.Combine(_paths.ProgramRoot, "installer", "afk-payload.py"),
+            command,
             "--program-root", _paths.ProgramRoot
         },
         _paths.ProgramRoot,
-        "stop");
+        command);
 
-    public ProcessSpec Health() => Python("health", "health");
     public ProcessSpec Diagnostics() => PowerShell(
         "diagnostics",
         "installer/Get-Preflight.ps1",
@@ -77,11 +83,4 @@ public sealed class ProvisioningController
         allArguments.AddRange(arguments);
         return ProcessSpec.Hidden(executable, allArguments, _paths.ProgramRoot, purpose);
     }
-
-    private ProcessSpec Python(string purpose, string command) =>
-        ProcessSpec.Hidden(
-            "py.exe",
-            new[] { "-3.12", "-m", "localai", command },
-            _paths.ProgramRoot,
-            purpose);
 }

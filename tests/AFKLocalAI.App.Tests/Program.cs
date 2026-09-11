@@ -100,27 +100,39 @@ try
     Check("preflight requests JSON", controller.Preflight().Arguments.Contains("-Json"));
     Check("provision requests event stream", controller.Provision().Arguments.Contains("-EventStream"));
 
-    // Regression: the uninstaller runs this. It used to be "py -m localai stop",
-    // which resolves through the ambient `localai` package name and, on a machine
-    // that also has the private engineering workbench installed editable, tore
-    // down that workbench's stack and force-closed Docker Desktop and Ollama for
-    // the whole machine. Ownership must come from this installation's own path.
-    var stopSpec = controller.Stop();
-    var stopArguments = string.Join(" ", stopSpec.Arguments);
-    Check("uninstall stop never invokes the ambient localai package",
-        !stopSpec.Arguments.Contains("localai") && !stopSpec.Arguments.Contains("-m"), stopArguments);
-    Check("uninstall stop runs the payload ownership entry point",
-        stopSpec.Arguments.Any(argument => argument.EndsWith(
-            Path.Combine("installer", "afk-stop.py"), StringComparison.OrdinalIgnoreCase)), stopArguments);
-    // Regression: importing the payload writes __pycache__ into the program
-    // directory. Setup never installed those files, so its uninstaller never
-    // removes them - and the whole installation survives the uninstall.
-    Check("uninstall stop writes no bytecode into the installation",
-        stopSpec.Arguments.Contains("-B"), stopArguments);
-    Check("uninstall stop passes this installation's program root",
-        stopSpec.Arguments.Contains("--program-root") &&
-        stopSpec.Arguments[stopSpec.Arguments.ToList().IndexOf("--program-root") + 1] == paths.ProgramRoot,
-        stopArguments);
+    // Regression: every Python-facing command used to be "py -3.12 -m localai <cmd>",
+    // which resolves through the ambient `localai` package name. On a machine that
+    // also has the private engineering workbench installed editable, Stop tore down
+    // that workbench's stack and force-closed Docker Desktop and Ollama for the whole
+    // machine; Start and Health quietly operated on, and reported about, that same
+    // foreign checkout. All three must run THIS installation's own payload by path.
+    foreach (var (name, spec) in new[]
+             {
+                 ("start", controller.Start()),
+                 ("stop", controller.Stop()),
+                 ("health", controller.Health())
+             })
+    {
+        var arguments = spec.Arguments;
+        var rendered = string.Join(" ", arguments);
+        Check($"{name} never invokes the ambient localai package",
+            !arguments.Contains("localai") && !arguments.Contains("-m") && !arguments.Contains("-3.12"),
+            rendered);
+        Check($"{name} runs the verified payload entry point",
+            arguments.Any(argument => argument.EndsWith(
+                Path.Combine("installer", "afk-payload.py"), StringComparison.OrdinalIgnoreCase)),
+            rendered);
+        Check($"{name} names the command explicitly", arguments.Contains(name), rendered);
+        // Regression: importing the payload writes __pycache__ into the program
+        // directory. Setup never installed those files, so its uninstaller never
+        // removes them - and the whole installation survives the uninstall.
+        Check($"{name} writes no bytecode into the installation",
+            arguments.Contains("-B"), rendered);
+        Check($"{name} passes this installation's program root",
+            arguments.Contains("--program-root") &&
+            arguments[arguments.ToList().IndexOf("--program-root") + 1] == paths.ProgramRoot,
+            rendered);
+    }
 
     var options = CommandLineOptions.Parse(new[] { "--self-test", "--data-root", dataRoot });
     Check("self-test option parses", options.SelfTest);
