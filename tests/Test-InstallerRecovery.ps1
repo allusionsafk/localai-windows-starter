@@ -4,6 +4,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 . (Join-Path $Root 'installer/installer-common.ps1')
 . (Join-Path $Root 'installer/recovery.ps1')
 
@@ -79,7 +80,7 @@ try { [void](Get-RecoveryCommand -ActionId 'docker-context-use' -ProgramFilesRoo
 Assert-True 'non-allowlisted recovery actions fail closed' $invalidActionThrew
 
 $modulePath = Join-Path $Root 'installer/recovery.ps1'
-$module = Get-Content -LiteralPath $modulePath -Raw
+$module = Get-ContractText -Path $modulePath
 foreach ($forbidden in @('bcdedit', 'docker\s+context\s+use', 'SwitchDaemon', 'Enable-WindowsOptionalFeature',
     'Disable-WindowsOptionalFeature', 'Set-VMProcessor', 'Set-MpPreference')) {
   Assert-True "recovery never contains forbidden mutation $forbidden" ($module -notmatch $forbidden)
@@ -116,14 +117,14 @@ try {
 $entryPath = Join-Path $Root 'installer/Invoke-Recovery.ps1'
 Assert-True 'shell-facing recovery entry point exists' (Test-Path -LiteralPath $entryPath -PathType Leaf)
 if (Test-Path -LiteralPath $entryPath -PathType Leaf) {
-  $entry = Get-Content -LiteralPath $entryPath -Raw
+  $entry = Get-ContractText -Path $entryPath
   foreach ($exitCode in @(0, 10, 20, 1)) {
     Assert-True "recovery entry point defines exit $exitCode" ($entry -match "exit\s+$exitCode\b")
   }
   Assert-True 'elevated recovery hides the Windows PowerShell window' ($entry -match 'WindowStyle.+Hidden')
 }
 
-$orchestrator = Get-Content -LiteralPath (Join-Path $Root 'installer/Install-LocalAI.ps1') -Raw
+$orchestrator = Get-ContractText -Path (Join-Path $Root 'installer/Install-LocalAI.ps1')
 Assert-True 'orchestrator accepts EventStream' ($orchestrator -match '\[switch\]\$EventStream')
 Assert-True 'orchestrator accepts LegacyInstallRoot' ($orchestrator -match '\[string\]\$LegacyInstallRoot')
 foreach ($kind in @('phase-start', 'phase-success', 'phase-failure', 'checkpoint')) {

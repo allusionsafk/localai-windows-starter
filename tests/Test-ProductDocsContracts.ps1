@@ -4,6 +4,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 $script:Pass = 0
 $script:Fail = 0
 $script:Failures = [System.Collections.Generic.List[string]]::new()
@@ -13,11 +14,11 @@ function Assert-True {
   $script:Fail++; $script:Failures.Add($Case)
 }
 
-$readme = Get-Content -LiteralPath (Join-Path $Root 'README.md') -Raw
-$support = Get-Content -LiteralPath (Join-Path $Root 'SUPPORT.md') -Raw
-$security = Get-Content -LiteralPath (Join-Path $Root 'SECURITY.md') -Raw
-$installer = Get-Content -LiteralPath (Join-Path $Root 'installer/README.md') -Raw
-$docs = Get-Content -LiteralPath (Join-Path $Root 'docs/README.md') -Raw
+$readme = Get-ContractText -Path (Join-Path $Root 'README.md')
+$support = Get-ContractText -Path (Join-Path $Root 'SUPPORT.md')
+$security = Get-ContractText -Path (Join-Path $Root 'SECURITY.md')
+$installer = Get-ContractText -Path (Join-Path $Root 'installer/README.md')
+$docs = Get-ContractText -Path (Join-Path $Root 'docs/README.md')
 $releasePath = Join-Path $Root 'docs/releases/0.2.0-rc1.md'
 $lifecyclePath = Join-Path $Root 'docs/install-upgrade-uninstall.md'
 
@@ -35,12 +36,12 @@ Assert-True 'docs index uses canonical product name' ($docs -match '^# AFK Local
 Assert-True 'current release notes exist' (Test-Path -LiteralPath $releasePath -PathType Leaf)
 Assert-True 'lifecycle guide exists' (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)
 if (Test-Path -LiteralPath $releasePath) {
-  $release = Get-Content -LiteralPath $releasePath -Raw
+  $release = Get-ContractText -Path $releasePath
   Assert-True 'release is explicitly prerelease' ($release -match '(?i)prerelease')
   Assert-True 'release blocks stable publication before exact lifecycle' ($release -match '(?is)exact installer bytes.*lifecycle')
 }
 if (Test-Path -LiteralPath $lifecyclePath) {
-  $lifecycle = Get-Content -LiteralPath $lifecyclePath -Raw
+  $lifecycle = Get-ContractText -Path $lifecyclePath
   Assert-True 'lifecycle guide names program path' ($lifecycle -match '%LOCALAPPDATA%\\Programs\\AFK LocalAI')
   Assert-True 'lifecycle guide names preserved state path' ($lifecycle -match '%LOCALAPPDATA%\\AFK LocalAI')
 }

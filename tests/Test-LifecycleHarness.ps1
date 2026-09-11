@@ -4,6 +4,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 . (Join-Path $Root 'scripts/lifecycle-common.ps1')
 
 $script:Pass = 0
@@ -72,14 +73,14 @@ $upgradePath = Join-Path $Root 'scripts/Test-LifecycleUpgrade.ps1'
 Assert-True 'exact-artifact lifecycle script exists' (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)
 Assert-True 'isolated upgrade lifecycle script exists' (Test-Path -LiteralPath $upgradePath -PathType Leaf)
 if (Test-Path -LiteralPath $lifecyclePath) {
-  $text = Get-Content -LiteralPath $lifecyclePath -Raw
+  $text = Get-ContractText -Path $lifecyclePath
   Assert-True 'digest is checked before installer starts' ($text.IndexOf('Assert-ExpectedDigest') -lt $text.IndexOf('Invoke-BoundedProcess') -and $text.IndexOf('Assert-ExpectedDigest') -ge 0)
   foreach ($needle in @('ExpectedSha256', '/VERYSILENT', '--self-test', 'UninstallString', 'Start Menu', 'Assert-LifecycleEvidence', 'ConvertTo-Json')) {
     Assert-True "lifecycle harness contains $needle" ($text -match [regex]::Escape($needle))
   }
 }
 if (Test-Path -LiteralPath $upgradePath) {
-  $text = Get-Content -LiteralPath $upgradePath -Raw
+  $text = Get-ContractText -Path $upgradePath
   foreach ($needle in @('0.1.99-test', '0.2.0-rc1', 'sentinel', 'TestAppId', 'DisplayVersion', 'state_preserved')) {
     Assert-True "upgrade harness contains $needle" ($text -match [regex]::Escape($needle))
   }

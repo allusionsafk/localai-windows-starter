@@ -4,6 +4,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 $script:Pass = 0
 $script:Fail = 0
 $script:Failures = [System.Collections.Generic.List[string]]::new()
@@ -21,7 +22,7 @@ Assert-True 'candidate workflow exists' (Test-Path -LiteralPath $candidatePath -
 Assert-True 'publish workflow exists' (Test-Path -LiteralPath $publishPath -PathType Leaf)
 
 if (Test-Path -LiteralPath $candidatePath) {
-  $candidate = Get-Content -LiteralPath $candidatePath -Raw
+  $candidate = Get-ContractText -Path $candidatePath
   Assert-True 'candidate runs on supported Windows host' ($candidate -match 'runs-on:\s*windows-2025')
   Assert-True 'candidate is manual or pull-request scoped' ($candidate -match 'workflow_dispatch' -and $candidate -match 'pull_request')
   Assert-True 'candidate runs full distribution validation' ($candidate -match 'Test-DistributionContracts\.ps1')
@@ -36,7 +37,7 @@ if (Test-Path -LiteralPath $candidatePath) {
 }
 
 if (Test-Path -LiteralPath $publishPath) {
-  $publish = Get-Content -LiteralPath $publishPath -Raw
+  $publish = Get-ContractText -Path $publishPath
   Assert-True 'publish is manual only' ($publish -match 'workflow_dispatch' -and $publish -notmatch '(?m)^\s*(push|pull_request|release):')
   Assert-True 'publish downloads a candidate run artifact' ($publish -match 'gh run download' -and $publish -match 'candidate_run_id')
   Assert-True 'publish accepts candidates only from the default branch' ($publish -match 'github\.event\.repository\.default_branch' -and $publish -match 'head_branch')
@@ -49,7 +50,7 @@ if (Test-Path -LiteralPath $publishPath) {
   Assert-True 'publish permissions are least scoped for release' ($publish -match 'contents:\s*write' -and $publish -match 'actions:\s*read')
 }
 
-$project = Get-Content -LiteralPath (Join-Path $Root 'pyproject.toml') -Raw
+$project = Get-ContractText -Path (Join-Path $Root 'pyproject.toml')
 Assert-True 'mypy major version is bounded for reproducible validation' ($project -match '"mypy>=1\.11,<2"')
 
 Write-Host ''

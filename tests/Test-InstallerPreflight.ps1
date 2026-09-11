@@ -20,6 +20,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 
 . (Join-Path $Root 'ai-common.ps1')
 . (Join-Path $Root 'installer/installer-common.ps1')
@@ -635,14 +636,14 @@ Save-InstallerState -State `$state -Path '$compatPath'
     }
 
     # A write that cannot be verified must leave the previous state intact.
-    $before = Get-Content -LiteralPath $statePath2 -Raw
+    $before = Get-ContractText -Path $statePath2
     $bad = [pscustomobject]@{ version = 2; phases_done = @('vet', 'intent'); self = $null }
     $bad.self = $bad     # cyclic: ConvertTo-Json -Depth cannot serialize this faithfully
     $writeThrew = $false
     try { Save-InstallerState -State $bad -Path $statePath2 } catch { $writeThrew = $true }
     Assert-True -Case 'a state write that cannot be validated is rejected' -Condition $writeThrew
     Assert-Equal -Case 'the previous complete state survives a rejected write' `
-        -Expected $before.Trim() -Actual ((Get-Content -LiteralPath $statePath2 -Raw).Trim())
+        -Expected $before.Trim() -Actual ((Get-ContractText -Path $statePath2).Trim())
 
     # A stale READY checkpoint must never be treated as current readiness.
     $stale = New-InstallerState
@@ -685,7 +686,7 @@ Save-InstallerState -State `$state -Path '$compatPath'
 Write-Host '-- control flow: the orchestrator ordering invariant' -ForegroundColor Cyan
 
 $orchestrator = Join-Path $Root 'installer/Install-LocalAI.ps1'
-$src = Get-Content -LiteralPath $orchestrator -Raw
+$src = Get-ContractText -Path $orchestrator
 
 # Read the declared phase order out of the real $Phases array rather than
 # trusting a comment: the invariant is about what actually runs.
@@ -719,7 +720,7 @@ Assert-True -Case 'no new planned-pause exit code above the pinned .cmd failure 
         Where-Object { [int]$_.Groups[1].Value -gt 10 -and [int]$_.Groups[1].Value -lt 100 })) `
     -Detail 'an exit code >10 would render as "Something went wrong" on already-downloaded installers'
 
-$cmd = Get-Content -LiteralPath (Join-Path $Root 'Install Local AI.cmd') -Raw
+$cmd = Get-ContractText -Path (Join-Path $Root 'Install Local AI.cmd')
 Assert-True -Case 'the outer .cmd still routes errorlevel 10 to the planned pause' `
     -Condition ($cmd -match 'errorlevel 10') -Detail 'exit-code contract broken'
 Assert-True -Case 'the outer .cmd planned-pause copy is no longer Docker-only' `
@@ -734,7 +735,7 @@ Assert-True -Case 'the preflight module is dot-sourced by the orchestrator' `
     -Condition ($src -match "preflight\.ps1")
 
 # No probe may run without a bounded timeout, and none may mutate the machine.
-$module = Get-Content -LiteralPath (Join-Path $Root 'installer/preflight.ps1') -Raw
+$module = Get-ContractText -Path (Join-Path $Root 'installer/preflight.ps1')
 # Real call sites only - a comment mentioning the helper is not a probe.
 $invocations = @(Get-Content -LiteralPath (Join-Path $Root 'installer/preflight.ps1') |
     Where-Object { $_ -match 'Invoke-AiProcess\s+-FilePath' })
@@ -771,7 +772,7 @@ $jsonEntry = Join-Path $Root 'installer/Get-Preflight.ps1'
 Assert-True -Case 'shell-facing JSON preflight entry point exists' `
     -Condition (Test-Path -LiteralPath $jsonEntry -PathType Leaf)
 if (Test-Path -LiteralPath $jsonEntry -PathType Leaf) {
-    $jsonEntryText = Get-Content -LiteralPath $jsonEntry -Raw
+    $jsonEntryText = Get-ContractText -Path $jsonEntry
     Assert-True -Case 'JSON entry point emits compressed machine-readable output' `
         -Condition ($jsonEntryText -match 'ConvertTo-Json.+-Compress')
     Assert-True -Case 'JSON entry point persists a bounded checkpoint' `

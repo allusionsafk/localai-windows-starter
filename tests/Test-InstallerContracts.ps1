@@ -4,6 +4,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'contract-common.ps1')
 $script:Pass = 0
 $script:Fail = 0
 $script:Failures = [System.Collections.Generic.List[string]]::new()
@@ -42,7 +43,7 @@ if (Test-Path -LiteralPath $toolchainPath) {
 
 Write-Host '-- Inno installer contract' -ForegroundColor Cyan
 if (Test-Path -LiteralPath $issPath) {
-  $iss = Get-Content -LiteralPath $issPath -Raw
+  $iss = Get-ContractText -Path $issPath
   $required = [ordered]@{
     'stable product AppId' = [regex]::Escape('#define TestAppId "{{8A8A2D4D-CE75-4A2D-A39B-56B4206F93D0}"')
     'per-user privileges' = '(?m)^PrivilegesRequired=lowest$'
@@ -76,6 +77,33 @@ if (Test-Path -LiteralPath $issPath) {
   Assert-True 'lifecycle test Start Menu group can be isolated at compile time' ($iss -match '#ifndef TestGroupName' -and $iss -match 'DefaultGroupName=\{#TestGroupName\}')
 }
 
+Write-Host '-- newline portability contract' -ForegroundColor Cyan
+# Regression: these contracts used to depend on how the checkout materialised
+# rather than on what the file says. .NET's multiline '$' matches immediately
+# BEFORE the '\n', so on a CRLF checkout the '\r' is still inside the line and a
+# pattern like '(?m)^ArchitecturesAllowed=x64compatible$' does not match. A local
+# LF clone passed while GitHub's windows-latest runner - which checks out with
+# core.autocrlf=true, and therefore CRLF - failed the identical tree.
+if (Test-Path -LiteralPath $issPath) {
+  $crlfProbe = Join-Path ([IO.Path]::GetTempPath()) ("afk-crlf-" + [guid]::NewGuid().ToString('n') + ".iss")
+  try {
+    # Re-materialise the real installer directive exactly as a CRLF checkout would.
+    $crlfBody = ((Get-ContractText -Path $issPath) -replace "`n", "`r`n")
+    [IO.File]::WriteAllText($crlfProbe, $crlfBody)
+    Assert-True 'CRLF probe really is CRLF' ([IO.File]::ReadAllText($crlfProbe).Contains("`r`n"))
+
+    $reread = Get-ContractText -Path $crlfProbe
+    Assert-True 'contract reader strips CR from a CRLF checkout' (-not $reread.Contains("`r"))
+    Assert-True 'contract reader preserves content' ($reread -eq (Get-ContractText -Path $issPath))
+    foreach ($item in $required.GetEnumerator()) {
+      Assert-True "survives a CRLF checkout: $($item.Key)" ($reread -match $item.Value) `
+        "pattern missing under CRLF: $($item.Value)"
+    }
+  } finally {
+    Remove-Item -LiteralPath $crlfProbe -Force -ErrorAction SilentlyContinue
+  }
+}
+
 Write-Host '-- deterministic payload contract' -ForegroundColor Cyan
 if (Test-Path -LiteralPath $manifestPath) {
   $entries = @(Get-Content -LiteralPath $manifestPath | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
@@ -94,12 +122,12 @@ if (Test-Path -LiteralPath $manifestPath) {
 
 foreach ($path in @($stagePath, $buildPath, $gatePath)) {
   if (Test-Path -LiteralPath $path) {
-    $text = Get-Content -LiteralPath $path -Raw
+    $text = Get-ContractText -Path $path
     Assert-True "$(Split-Path -Leaf $path) uses strict errors" ($text -match '\$ErrorActionPreference\s*=\s*''Stop''')
   }
 }
 if (Test-Path -LiteralPath $stagePath) {
-  $stage = Get-Content -LiteralPath $stagePath -Raw
+  $stage = Get-ContractText -Path $stagePath
   Assert-True 'payload builder rejects traversal' ($stage -match 'IsPathRooted' -and $stage -match '\.\.')
   Assert-True 'payload hashes every selected file' ($stage -match 'Get-FileHash' -and $stage -match 'SHA256')
   Assert-True 'payload manifest records source commit' ($stage -match 'source_commit')
@@ -109,7 +137,7 @@ if (Test-Path -LiteralPath $stagePath) {
     $stage -match [regex]::Escape("Join-Path `$staging 'version.json'"))
 }
 if (Test-Path -LiteralPath $buildPath) {
-  $build = Get-Content -LiteralPath $buildPath -Raw
+  $build = Get-ContractText -Path $buildPath
   Assert-True 'build publishes self-contained x64 shell' ($build -match 'dotnet' -and $build -match 'self-contained' -and $build -match 'win-x64')
   Assert-True 'build emits SHA-256 sidecar' ($build -match 'Get-FileHash' -and $build -match 'sha256\.txt')
   Assert-True 'build derives output name from canonical metadata' ($build -match 'installer_name')
@@ -128,7 +156,7 @@ $ownershipPath = Require-File 'src/localai/afk_ownership.py'
 $stopEntryPath = Require-File 'installer/afk-stop.py'
 
 if (Test-Path -LiteralPath $controllerPath) {
-  $controller = Get-Content -LiteralPath $controllerPath -Raw
+  $controller = Get-ContractText -Path $controllerPath
   $stopMember = [regex]::Match($controller, '(?s)public ProcessSpec Stop\(\).*?;')
   Assert-True 'app exposes a Stop command' $stopMember.Success
   if ($stopMember.Success) {
@@ -148,7 +176,7 @@ if (Test-Path -LiteralPath $controllerPath) {
 }
 
 if (Test-Path -LiteralPath $stopEntryPath) {
-  $stopEntry = Get-Content -LiteralPath $stopEntryPath -Raw
+  $stopEntry = Get-ContractText -Path $stopEntryPath
   Assert-True 'stop entry point resolves the payload package by path' (
     $stopEntry -match 'sys\.path\.insert' -and $stopEntry -match '"src"')
   Assert-True 'stop entry point discards an already-imported localai' (
@@ -163,7 +191,7 @@ if (Test-Path -LiteralPath $stopEntryPath) {
 }
 
 if (Test-Path -LiteralPath $ownershipPath) {
-  $ownership = Get-Content -LiteralPath $ownershipPath -Raw
+  $ownership = Get-ContractText -Path $ownershipPath
   # Strip the module docstring: it names the forbidden operations in order to
   # explain why they are forbidden.
   $ownershipBody = ($ownership -split '"""', 3)[-1]
