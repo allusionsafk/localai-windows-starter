@@ -12,8 +12,10 @@ before doing anything. If it cannot prove it is running this installation's own
 code, it stops nothing and exits 0 - an uninstall must not fail, and must never
 guess about ownership.
 
-Kept deliberately simple so it still parses and runs on an old interpreter: the
-version gate has to be reachable before any modern syntax is evaluated.
+Kept deliberately plain - no imports from the package at module scope, no typing
+syntax newer than f-strings - so that an interpreter too old to run the product
+still parses this file and reaches the version gate, rather than dying with a
+SyntaxError during an uninstall.
 """
 
 import os
@@ -42,10 +44,10 @@ def _parse_program_root(argv, default_root):
 
 def main(argv):
     if sys.version_info < MINIMUM_PYTHON:
-        found = "%d.%d" % (sys.version_info[0], sys.version_info[1])
+        found = f"{sys.version_info[0]}.{sys.version_info[1]}"
+        needed = f"{MINIMUM_PYTHON[0]}.{MINIMUM_PYTHON[1]}"
         return _refuse(
-            "AFK LocalAI stop needs Python %d.%d or newer; found %s."
-            % (MINIMUM_PYTHON[0], MINIMUM_PYTHON[1], found)
+            f"AFK LocalAI stop needs Python {needed} or newer; found {found}."
         )
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -54,9 +56,7 @@ def main(argv):
     package_root = os.path.join(source_root, "localai")
 
     if not os.path.isdir(package_root):
-        return _refuse(
-            "No AFK LocalAI payload found at %s." % package_root
-        )
+        return _refuse(f"No AFK LocalAI payload found at {package_root}.")
 
     # Our own payload must win over any ambient install of the same name, and
     # anything already imported under that name must not be reused.
@@ -71,16 +71,17 @@ def main(argv):
     try:
         import localai
     except ImportError as error:
-        return _refuse("Could not load the AFK LocalAI payload: %s" % error)
+        return _refuse(f"Could not load the AFK LocalAI payload: {error}")
 
     # Proof, not assumption: a .pth entry or a meta-path finder from another
     # installation could still have answered the import.
     resolved = os.path.abspath(getattr(localai, "__file__", "") or "")
     expected = os.path.join(package_root, "")
     if not resolved.lower().startswith(expected.lower()):
+        answered = resolved or "<unknown>"
         return _refuse(
-            "Resolved 'localai' from %s, which is not this installation (%s)."
-            % (resolved or "<unknown>", package_root)
+            f"Resolved 'localai' from {answered}, which is not this "
+            f"installation ({package_root})."
         )
 
     from localai.afk_ownership import collect_afk_stop_report
