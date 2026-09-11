@@ -213,26 +213,28 @@ def collect_afk_stop_report(
         return _finish(lines)
 
     lines.append(
-        f"[2/2] Stopping AFK-owned project '{stack.project}' "
-        f"({len(stack.container_ids)} container(s))."
+        f"[2/2] Stopping {len(stack.container_ids)} AFK-owned container(s) "
+        f"in project '{stack.project}'."
     )
+    # Stop the exact containers whose ownership was proven, addressed by id.
+    #
+    # NOT "docker compose --project-name <p> --file <f> stop": compose resolves
+    # targets from the project name and the service names in the file, and
+    # ignores the config_files label entirely. Verified against a live daemon -
+    # a compose stop scoped with one file stopped a container labelled as
+    # belonging to a different file. Since the shipped compose declares
+    # "name: localai", and the private workbench's compose declares the same,
+    # that is not hypothetical: proving ownership by label and then acting by
+    # project name would hand execution to a weaker key than the proof.
     result = runner(
-        [
-            docker_executable(),
-            "compose",
-            "--project-name",
-            stack.project,
-            "--file",
-            str(stack.compose_file),
-            "stop",
-        ],
+        [docker_executable(), "stop", *stack.container_ids],
         timeout_sec=timeout_sec,
     )
     if result.code == 124:
-        lines.append(f"WARNING: docker compose stop timed out after {timeout_sec}s.")
+        lines.append(f"WARNING: docker stop timed out after {timeout_sec}s.")
     elif result.code != 0:
         lines.append(
-            f"WARNING: docker compose stop failed with exit {result.code}. "
+            f"WARNING: docker stop failed with exit {result.code}. "
             f"{result.text.strip()}"
         )
     else:

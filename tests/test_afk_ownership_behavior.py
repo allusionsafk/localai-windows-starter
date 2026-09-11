@@ -126,9 +126,7 @@ def test_stop_does_nothing_when_no_owned_container_exists(tmp_path: Path) -> Non
     assert any("nothing to stop" in line for line in lines)
 
 
-def test_stop_scopes_the_compose_command_to_the_owned_project(
-    tmp_path: Path,
-) -> None:
+def test_stop_addresses_exactly_the_proven_containers(tmp_path: Path) -> None:
     program_root = _install(tmp_path)
     compose = str((program_root / "docker-compose.yml").resolve())
     listing = _ps_row("abc123", "afklocalai", compose)
@@ -144,14 +142,58 @@ def test_stop_scopes_the_compose_command_to_the_owned_project(
     assert code == 0
     assert len(runner.calls) == 2
     stop_call = runner.calls[1]
-    assert "compose" in stop_call
-    assert "stop" in stop_call
-    # Scoped by BOTH the proven project name and the owned file.
-    assert "--project-name" in stop_call
-    assert stop_call[stop_call.index("--project-name") + 1] == "afklocalai"
-    assert "--file" in stop_call
-    assert stop_call[stop_call.index("--file") + 1] == compose
+    assert stop_call[1:] == ("stop", "abc123")
     assert any("AFK-owned containers stopped" in line for line in lines)
+
+
+def test_stop_never_delegates_to_a_project_scoped_compose_command(
+    tmp_path: Path,
+) -> None:
+    """Compose resolves targets by project + service name, not by the label.
+
+    Verified against a live daemon: `docker compose --project-name P --file B
+    stop` stopped a container labelled as belonging to file A. The shipped
+    compose declares `name: localai` and so does the private workbench's, so
+    proving ownership by label and then acting by project name would hand
+    execution to a weaker key than the proof.
+    """
+    program_root = _install(tmp_path)
+    compose = str((program_root / "docker-compose.yml").resolve())
+    runner = RecordingRunner(
+        CommandResult((), 0, _ps_row("abc123", "localai", compose), ""),
+        CommandResult((), 0, "", ""),
+    )
+
+    afk_ownership.collect_afk_stop_report(program_root=program_root, runner=runner)
+
+    stop_call = runner.calls[1]
+    assert "compose" not in stop_call
+    assert "--project-name" not in stop_call
+    assert "--file" not in stop_call
+
+
+def test_stop_skips_a_foreign_container_sharing_the_project_name(
+    tmp_path: Path,
+) -> None:
+    """The real collision: same project name, different owning checkout."""
+    program_root = _install(tmp_path)
+    compose = str((program_root / "docker-compose.yml").resolve())
+    # Both projects are called "localai" - only the config path differs.
+    listing = (
+        _ps_row("foreign99", "localai", WORKBENCH_COMPOSE)
+        + _ps_row("owned01", "localai", compose)
+    )
+    runner = RecordingRunner(
+        CommandResult((), 0, listing, ""),
+        CommandResult((), 0, "", ""),
+    )
+
+    afk_ownership.collect_afk_stop_report(program_root=program_root, runner=runner)
+
+    stop_call = runner.calls[1]
+    assert "owned01" in stop_call
+    assert "foreign99" not in stop_call
+    assert "foreign99" not in runner.flattened
 
 
 def test_stop_leaves_the_private_workbench_stack_alone(tmp_path: Path) -> None:
@@ -197,8 +239,7 @@ def test_stop_targets_only_owned_containers_in_a_mixed_listing(
 
     assert code == 0
     stop_call = runner.calls[1]
-    assert stop_call[stop_call.index("--project-name") + 1] == "afklocalai"
-    assert stop_call[stop_call.index("--file") + 1] == compose
+    assert stop_call[1:] == ("stop", "afk1")
     # Nothing belonging to the workbench may reach a stop command.
     assert WORKBENCH_COMPOSE not in runner.flattened
     assert "workbench1" not in runner.flattened

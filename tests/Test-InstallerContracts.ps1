@@ -238,10 +238,17 @@ if (Test-Path -LiteralPath $ownershipPath) {
     $ownershipBody -match 'com\.docker\.compose\.project\.config_files')
   Assert-True 'ownership requires an absolute program root' (
     $ownershipBody -match 'is_absolute')
-  Assert-True 'ownership scopes the stop to a proven project name' (
-    $ownershipBody -match [regex]::Escape('"--project-name"'))
-  Assert-True 'ownership scopes the stop to the owned compose file' (
-    $ownershipBody -match [regex]::Escape('"--file"'))
+  # Compose resolves targets from the project name and the service names in the
+  # file, ignoring the config_files label. Verified against a live daemon: a
+  # compose stop scoped with one file stopped a container labelled as belonging
+  # to a different file. The shipped compose declares "name: localai" and so
+  # does the private workbench's, so acting by project name would hand execution
+  # to a weaker key than the proof. Act on the proven container ids instead.
+  Assert-True 'ownership stops the proven containers by id' (
+    $ownershipBody -match [regex]::Escape('"stop", *stack.container_ids'))
+  Assert-True 'ownership never delegates to a project-scoped compose command' (
+    $ownershipBody -notmatch [regex]::Escape('"--project-name"') -and
+    $ownershipBody -notmatch [regex]::Escape('"compose"'))
   Assert-True 'ownership fails closed on conflicting projects' (
     $ownershipBody -match 'conflicting project names')
 }
