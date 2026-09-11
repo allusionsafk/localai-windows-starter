@@ -22,7 +22,31 @@ public sealed class ProvisioningController
         "-LegacyInstallRoot", _paths.LegacyInstallRoot, "-EventStream");
 
     public ProcessSpec Start() => Python("start", "start");
-    public ProcessSpec Stop() => Python("stop", "stop");
+
+    /// <summary>
+    /// Stops only what this installation can prove it owns.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT "py -m localai stop". That command resolves through the
+    /// ambient <c>localai</c> package name, so on a machine that also has the
+    /// private engineering workbench installed editable it runs the workbench's
+    /// code against the workbench's repository root - unloading Ollama models,
+    /// tearing down the workbench's compose project, and force-closing Docker
+    /// Desktop and Ollama for the whole machine. The uninstaller runs this, so it
+    /// must never be able to do any of that. The payload script below is invoked
+    /// by path, resolves this installation's own code, and refuses to act when
+    /// ownership cannot be proven.
+    /// </remarks>
+    public ProcessSpec Stop() => ProcessSpec.Hidden(
+        "py.exe",
+        new[]
+        {
+            Path.Combine(_paths.ProgramRoot, "installer", "afk-stop.py"),
+            "--program-root", _paths.ProgramRoot
+        },
+        _paths.ProgramRoot,
+        "stop");
+
     public ProcessSpec Health() => Python("health", "health");
     public ProcessSpec Diagnostics() => PowerShell(
         "diagnostics",

@@ -100,6 +100,23 @@ try
     Check("preflight requests JSON", controller.Preflight().Arguments.Contains("-Json"));
     Check("provision requests event stream", controller.Provision().Arguments.Contains("-EventStream"));
 
+    // Regression: the uninstaller runs this. It used to be "py -m localai stop",
+    // which resolves through the ambient `localai` package name and, on a machine
+    // that also has the private engineering workbench installed editable, tore
+    // down that workbench's stack and force-closed Docker Desktop and Ollama for
+    // the whole machine. Ownership must come from this installation's own path.
+    var stopSpec = controller.Stop();
+    var stopArguments = string.Join(" ", stopSpec.Arguments);
+    Check("uninstall stop never invokes the ambient localai package",
+        !stopSpec.Arguments.Contains("localai") && !stopSpec.Arguments.Contains("-m"), stopArguments);
+    Check("uninstall stop runs the payload ownership entry point",
+        stopSpec.Arguments.Any(argument => argument.EndsWith(
+            Path.Combine("installer", "afk-stop.py"), StringComparison.OrdinalIgnoreCase)), stopArguments);
+    Check("uninstall stop passes this installation's program root",
+        stopSpec.Arguments.Contains("--program-root") &&
+        stopSpec.Arguments[stopSpec.Arguments.ToList().IndexOf("--program-root") + 1] == paths.ProgramRoot,
+        stopArguments);
+
     var options = CommandLineOptions.Parse(new[] { "--self-test", "--data-root", dataRoot });
     Check("self-test option parses", options.SelfTest);
     Check("data-root option parses", options.DataRoot == Path.GetFullPath(dataRoot), options.DataRoot ?? "null");

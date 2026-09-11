@@ -24,6 +24,7 @@ docker-compose.yml
 installer/Get-Preflight.ps1
 installer/Install-LocalAI.ps1
 installer/Invoke-Recovery.ps1
+installer/afk-stop.py
 installer/installer-common.ps1
 installer/preflight.ps1
 installer/recovery.ps1
@@ -38,6 +39,7 @@ qwen3-grounded.Modelfile
 qwen3.6-thinklight-grounded.Modelfile
 src/localai/__init__.py
 src/localai/__main__.py
+src/localai/afk_ownership.py
 src/localai/anywhere.py
 src/localai/backup.py
 src/localai/cli.py

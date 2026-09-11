@@ -116,6 +116,85 @@ if (Test-Path -LiteralPath $buildPath) {
   Assert-True 'build verifies the pinned Inno compiler version' ($build -match 'toolchain\.json' -and $build -match 'GetVersionInfo')
 }
 
+Write-Host '-- uninstall ownership contract' -ForegroundColor Cyan
+# Regression: uninstalling AFK LocalAI must only ever stop resources whose AFK
+# ownership is proven. The shipped uninstaller used to run "py -m localai stop",
+# which resolves through the ambient `localai` name - on a machine that also has
+# the private engineering workbench installed editable that unloaded every
+# loaded Ollama model, tore down the workbench's compose project, and
+# force-closed Docker Desktop and Ollama machine-wide.
+$controllerPath = Require-File 'src/AFKLocalAI.App/ProvisioningController.cs'
+$ownershipPath = Require-File 'src/localai/afk_ownership.py'
+$stopEntryPath = Require-File 'installer/afk-stop.py'
+
+if (Test-Path -LiteralPath $controllerPath) {
+  $controller = Get-Content -LiteralPath $controllerPath -Raw
+  $stopMember = [regex]::Match($controller, '(?s)public ProcessSpec Stop\(\).*?;')
+  Assert-True 'app exposes a Stop command' $stopMember.Success
+  if ($stopMember.Success) {
+    $stopText = $stopMember.Value
+    Assert-True 'uninstall stop does not invoke the ambient localai package' (
+      $stopText -notmatch '"localai"' -and $stopText -notmatch 'Python\(')
+    Assert-True 'uninstall stop runs the payload ownership entry point' (
+      $stopText -match [regex]::Escape('"afk-stop.py"'))
+    Assert-True 'uninstall stop passes an explicit program root' (
+      $stopText -match [regex]::Escape('"--program-root"'))
+  }
+}
+
+if (Test-Path -LiteralPath $stopEntryPath) {
+  $stopEntry = Get-Content -LiteralPath $stopEntryPath -Raw
+  Assert-True 'stop entry point resolves the payload package by path' (
+    $stopEntry -match 'sys\.path\.insert' -and $stopEntry -match '"src"')
+  Assert-True 'stop entry point discards an already-imported localai' (
+    $stopEntry -match 'del sys\.modules')
+  Assert-True 'stop entry point proves which package answered the import' (
+    $stopEntry -match '__file__' -and $stopEntry -match 'startswith')
+  Assert-True 'stop entry point refuses rather than guessing' (
+    $stopEntry -match 'Refusing to stop shared')
+  Assert-True 'stop entry point never fails an uninstall' ($stopEntry -match 'return 0')
+}
+
+if (Test-Path -LiteralPath $ownershipPath) {
+  $ownership = Get-Content -LiteralPath $ownershipPath -Raw
+  # Strip the module docstring: it names the forbidden operations in order to
+  # explain why they are forbidden.
+  $ownershipBody = ($ownership -split '"""', 3)[-1]
+  # Operation-shaped, not word-shaped: the module's closing report legitimately
+  # mentions Docker Desktop and Ollama to say it left them alone.
+  $forbidden = [ordered]@{
+    'never force-closes processes' = 'taskkill'
+    'never stops Docker Desktop' = 'Docker Desktop\.exe|com\.docker\.backend'
+    'never invokes Ollama' = 'ollama\.exe|"ollama"|ollama_path|ollama\s+(stop|rm|ps)'
+    'never queries loaded models' = 'api/ps|11434'
+    'never prunes Docker' = 'prune'
+    'never removes volumes' = 'volume rm|--volumes'
+    'never removes containers' = '"down"'
+  }
+  foreach ($rule in $forbidden.GetEnumerator()) {
+    Assert-True "ownership module $($rule.Key)" ($ownershipBody -notmatch $rule.Value) `
+      "matched: $($rule.Value)"
+  }
+  Assert-True 'ownership is decided by the compose config file path' (
+    $ownershipBody -match 'com\.docker\.compose\.project\.config_files')
+  Assert-True 'ownership requires an absolute program root' (
+    $ownershipBody -match 'is_absolute')
+  Assert-True 'ownership scopes the stop to a proven project name' (
+    $ownershipBody -match [regex]::Escape('"--project-name"'))
+  Assert-True 'ownership scopes the stop to the owned compose file' (
+    $ownershipBody -match [regex]::Escape('"--file"'))
+  Assert-True 'ownership fails closed on conflicting projects' (
+    $ownershipBody -match 'conflicting project names')
+}
+
+if (Test-Path -LiteralPath $manifestPath) {
+  $ownershipEntries = @(Get-Content -LiteralPath $manifestPath | ForEach-Object { $_.Trim() })
+  Assert-True 'payload ships the ownership module' (
+    $ownershipEntries -contains 'src/localai/afk_ownership.py')
+  Assert-True 'payload ships the stop entry point' (
+    $ownershipEntries -contains 'installer/afk-stop.py')
+}
+
 Write-Host ''
 if ($script:Fail) {
   Write-Host "FAILURES ($script:Fail):" -ForegroundColor Red
