@@ -1,60 +1,45 @@
 # Security policy
 
-AFK AI is Friend Beta software. Security and privacy reports are welcome,
-especially when the installer, local service boundary, diagnostics, update path,
-or download integrity could put a user's machine or data at risk.
+AFK AI is Friend Beta software. Please report security or privacy problems that could affect the installer, local services, diagnostics, updates, download integrity, or user data.
 
 ## Report privately
 
-**Use GitHub private vulnerability reporting:**
+Use GitHub private vulnerability reporting:
 
 https://github.com/allusionsafk/localai-windows-starter/security/advisories/new
 
 > [!CAUTION]
-> Do not publish exploit details, credentials, private logs, chat content,
-> documents, `.env` values, tokens, cookies, or other sensitive material in a
-> normal GitHub issue.
+> Do not publish exploit details, credentials, private logs, chat content, documents, `.env` values, tokens, cookies, or other sensitive material in a normal GitHub issue.
 
 ## In scope
 
-Useful security reports include:
+Examples include:
 
 - bypasses of installer or release integrity checks
-- AFK AI services becoming reachable outside the intended local boundary
-  without explicit opt-in
-- credential, secret, prompt, chat, document, or file-content leakage
+- local services becoming reachable outside the intended network scope without explicit opt-in
+- credential, prompt, chat, document, or file-content leakage
 - command injection or unsafe privilege changes
 - unexpected system modification
-- unsafe update or dependency behavior
-- privacy claims that do not match actual network behavior
+- unsafe update or dependency behaviour
+- privacy documentation that does not match observed network behaviour
 
 ## What to include
 
-Please provide the smallest reproducible report you can:
+Please provide:
 
 1. AFK AI tag, commit, or branch
 2. Windows version
-3. only the hardware details relevant to the issue
+3. only hardware details relevant to the issue
 4. exact reproduction steps
-5. expected behavior
-6. observed behavior
+5. expected behaviour
+6. observed behaviour
 7. security or privacy impact
-8. a sanitized diagnostic excerpt, only when necessary
+8. a sanitised diagnostic excerpt when necessary
 
-Before sharing logs or screenshots, remove:
+Before sharing logs or screenshots, remove usernames, private paths, unrelated host details, credentials, tokens, cookies, API keys, prompts, chats, and documents.
 
-- usernames and home-directory paths
-- hostnames and IP addresses unless they are essential to the report
-- tokens, cookies, API keys, and credentials
-- prompts, chats, and documents
-- unrelated machine information
+## Version scope
 
-## Friend Beta boundary
+The current public Friend Beta is `v0.1.7rc1`. Development on `master` can be newer, so reports should identify the exact tag or commit tested.
 
-The current public Friend Beta is `v0.1.7rc1`.
-
-`master` can move ahead of that candidate, so every report should identify the
-tag or commit being tested.
-
-For setup problems, hardware compatibility questions, and non-security bugs,
-start with [SUPPORT.md](SUPPORT.md).
+For installation, hardware, or ordinary product bugs, use [SUPPORT.md](SUPPORT.md).

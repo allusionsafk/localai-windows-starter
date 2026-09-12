@@ -1,23 +1,19 @@
 ## Problem
 
-<!-- What concrete user or engineering problem does this address? -->
+<!-- What user or engineering problem does this address? -->
 
 ## Change
 
-<!-- What changed, and what deliberately did not change? -->
+<!-- What changed? Note important exclusions only when they matter to review. -->
 
 ## Verification
 
-<!-- List only checks or tests you actually ran, with results when useful. -->
+<!-- List checks that actually ran and their results. -->
 
-## Risk / boundaries
+## Impact
 
-<!-- Privacy, security, installer, release-pin, network, migration, or supported-platform impact. Write "none" when genuinely none. -->
+<!-- Note any security, privacy, installer, network, release, migration, or supported-platform impact. Write "None" when there is none. -->
 
-## Known limitations
+## Remaining work
 
-<!-- What remains unverified, environment-dependent, approximate, or intentionally out of scope? -->
-
-## Follow-up
-
-<!-- Deferred work, if any. -->
+<!-- Unverified paths, known limitations, or follow-up work. -->

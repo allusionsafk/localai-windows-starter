@@ -2,72 +2,62 @@
 
 > Friend Beta `0.1.7rc1`
 
-AFK AI is a local-first AI workspace for Windows 11. It brings together Ollama, Open WebUI, SearXNG, local voice, hardware-aware model selection, and a Windows setup path intended for people who do not want to manage the stack by hand.
+AFK AI is a local-first AI workspace for Windows 11. It combines Ollama, Open WebUI, SearXNG, local voice, hardware-aware model selection, and a guided Windows setup path.
 
-**[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)** · [Support](SUPPORT.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[Download](https://localai-windows-starter-site.allusionsafk.workers.dev/) | [Support](SUPPORT.md) | [Security](SECURITY.md) | [Contributing](CONTRIBUTING.md)
 
-## Current boundary
+## At a glance
 
 | | |
 |---|---|
 | Status | Friend Beta `0.1.7rc1` |
 | Primary target | Windows 11 with an NVIDIA GPU |
-| CPU-only path | Supported with smaller models, but slow |
+| CPU-only path | Smaller models with slower generation |
 | Chat | Open WebUI at `http://localhost:3000` |
-| Model runtime | Ollama on Windows |
+| Model runtime | Ollama for Windows |
 | Optional search | SearXNG at `http://localhost:8080` |
 | Licence | MIT |
 
-Friend Beta is still being qualified on clean Windows machines. The pinned public candidate and the development branch are separate things. A newer branch or pull request can contain recovery or installer work that is not part of the website download.
+The public Friend Beta is pinned separately from development. Branches and pull requests can contain work that is not included in the current download.
 
 ## Install
 
-### Recommended path
+Download AFK AI from the [project website](https://localai-windows-starter-site.allusionsafk.workers.dev/).
 
-Download from the **[AFK AI website](https://localai-windows-starter-site.allusionsafk.workers.dev/)**.
+The website serves a pinned Friend Beta installer after verifying its SHA-256. It does not use GitHub `releases/latest` as the AFK AI version authority.
 
-The site serves a pinned Friend Beta installer only after checking its SHA-256. It does not use GitHub `releases/latest` as the AFK AI version authority.
+The source file remains named `Install Local AI.cmd` for compatibility. The website serves the same pinned bytes as `Install AFK AI.cmd`.
 
-The source file in this repository is still named `Install Local AI.cmd` for compatibility. The website serves the same pinned bytes to the browser as `Install AFK AI.cmd`.
+Run the downloaded installer and follow the prompts. Windows may warn about the unsigned Friend Beta script. The file can be inspected before it is run.
 
-Run the downloaded installer and follow the prompts. Windows may warn about the unsigned Friend Beta script. You can inspect the file before running it.
+If Smart App Control blocks the script, do not disable Smart App Control for the beta. Use the inspectable source/bootstrap route instead.
 
-If Smart App Control blocks the script completely, do not disable Smart App Control for the beta. Use the inspectable source/bootstrap route instead.
-
-### Open chat
-
-After a successful install, Open WebUI is available at:
-
-```text
-http://localhost:3000
-```
-
-The first Open WebUI account created on that installation becomes the local owner/admin account. It is stored in Open WebUI's local database. It is not an AFK AI cloud account.
-
-## What runs locally
+## Local services
 
 | Service | Endpoint | Purpose |
 |---|---|---|
 | Open WebUI | `127.0.0.1:3000` | Chat interface |
 | SearXNG | `127.0.0.1:8080` | Optional web search |
-| Control Center | `127.0.0.1:8765` | Local health and diagnostics |
+| Control Center | `127.0.0.1:8765` | Health and diagnostics |
 | Kokoro TTS | `127.0.0.1:8880` | Local voice |
 | Ollama | host port `11434` | Native Windows model runtime |
 
 Ollama runs on the Windows host so it can use the GPU directly. Docker-hosted services reach it through the configured host boundary.
 
+After installation, open `http://localhost:3000`. The first Open WebUI account created on that installation becomes its local owner/admin account. It is stored in Open WebUI's local database, not in an AFK AI cloud account.
+
 ## Privacy
 
 AFK AI is local-first, not offline-only.
 
-**Local by design**
+Local by design:
 
 - model inference through local Ollama
 - Open WebUI account and chat storage
 - local UI, voice, search front end, and Control Center
 - diagnostics intended to exclude chats, prompts, documents, credentials, and file contents
 
-**Internet access can still occur for**
+Internet access can still be used for:
 
 - setup and software downloads
 - model downloads
@@ -77,7 +67,7 @@ AFK AI is local-first, not offline-only.
 
 Remote access is separate and opt-in. The included Tailscale helper is not enabled automatically.
 
-See [SECURITY.md](SECURITY.md) for the full public security boundary.
+See [SECURITY.md](SECURITY.md) for reporting and security details.
 
 ## Requirements
 
@@ -86,16 +76,16 @@ Current Friend Beta target:
 - Windows 11
 - hardware virtualization for the Docker path
 - NVIDIA GPU recommended
-- roughly 40 GB of free disk for a comfortable first install
+- about 40 GB of free disk for a comfortable first install
 - Docker Desktop
 - Ollama for Windows
 - PowerShell 7 for the full tooling path
 
-The current source also contains Python-based internal tooling. Distribution work is moving toward a more self-owned runtime boundary rather than asking users to manage project internals manually.
+The source tree also contains Python-based engineering tools. Distribution work is moving toward a more self-contained runtime path so end users do not need to manage project internals.
 
-## Hardware-aware model fitting
+## Model fitting
 
-Model Scout evaluates the detected machine before recommending a model/context combination. The broad tiers are:
+Model Scout evaluates the detected machine before recommending a model and context combination.
 
 | Tier | VRAM | Typical target |
 |---|---:|---|
@@ -105,11 +95,11 @@ Model Scout evaluates the detected machine before recommending a model/context c
 | C | 4 GB | Compact models |
 | CPU | none | Small models with slow generation |
 
-A model that loads is not automatically a good fit. Architecture, quantization, context length, KV cache, runtime overhead, RAM, VRAM, and offload all matter.
+A successful load does not by itself mean a model is a good fit. Architecture, quantization, context length, KV cache, runtime overhead, RAM, VRAM, and offload all matter.
 
-## Development checkout
+## Development
 
-For contributors working from source:
+For a source checkout:
 
 ```powershell
 pip install -e .
@@ -122,7 +112,7 @@ Set a strong `SEARXNG_SECRET` in `.env` before using the search stack.
 
 The internal package and command still use `localai` for continuity. **AFK AI** is the product name. This project is not affiliated with or endorsed by mudler/LocalAI or localai.io.
 
-## Useful commands
+Common commands:
 
 | Command | Purpose |
 |---|---|
@@ -145,22 +135,18 @@ Run `localai --help` for the complete command list.
 | Document | Purpose |
 |---|---|
 | [Documentation index](docs/README.md) | Public docs and engineering records |
-| [Support](SUPPORT.md) | Friend Beta support scope |
-| [Security](SECURITY.md) | Private vulnerability reporting and privacy boundary |
+| [Support](SUPPORT.md) | Support scope and issue routing |
+| [Security](SECURITY.md) | Private vulnerability reporting |
 | [Contributing](CONTRIBUTING.md) | Contribution and test expectations |
-| [Friend Beta notes](docs/releases/0.1.7rc1.md) | Pinned candidate scope and known limitations |
+| [Friend Beta notes](docs/releases/0.1.7rc1.md) | Current public candidate |
 | [Installer guide](installer/README.md) | Bootstrap and installer architecture |
-| [WebBrain guide](docs/webbrain.md) | Browser/search integration |
+| [WebBrain guide](docs/webbrain.md) | Browser and search integration |
 
-## Release note
-
-This repository has also carried historical Adaptive Media release artefacts. Those are not AFK AI versions. For AFK AI, the website pin and the named Friend Beta release record are authoritative.
+Historical Adaptive Media release artefacts also exist in this repository. They are not AFK AI versions. For AFK AI, use the website pin and the named Friend Beta release record.
 
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
-
----
 
 **ALLUSIONS**  
 Independent software by Jidan.
