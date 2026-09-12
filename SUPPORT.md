@@ -2,24 +2,24 @@
 
 AFK AI is currently Friend Beta `0.1.7rc1`.
 
-Support at this stage is focused on reproducible Windows installation, runtime, chat, model, and hardware problems.
+Support is focused on reproducible Windows installation, runtime, chat, model, and hardware problems.
 
-**[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)**
+[Download AFK AI](https://localai-windows-starter-site.allusionsafk.workers.dev/)
 
-## Current target
+## Supported target
 
 | | |
 |---|---|
 | OS | Windows 11 |
 | Accelerated path | NVIDIA GPU |
-| CPU-only path | Smaller models, slower generation |
+| CPU-only path | Smaller models with slower generation |
 | Container runtime | Docker Desktop |
 | Model runtime | Ollama for Windows |
 | Recommended free disk | About 40 GB for a comfortable first install |
 
-Friend Beta is pre-release software. The pinned public candidate is not the same thing as newer development branches and pull requests.
+The public Friend Beta is pinned separately from development branches and pull requests.
 
-## Installation problem
+## Installation or setup
 
 Use the **Installation / setup problem** issue form.
 
@@ -36,7 +36,7 @@ Include:
 
 Do not post credentials, `.env` contents, private documents, chats, prompts, cookies, tokens, or unrelated machine information.
 
-## Hardware or compatibility problem
+## Hardware or compatibility
 
 Use the **Hardware / compatibility problem** form for issues involving:
 
@@ -49,24 +49,24 @@ Use the **Hardware / compatibility problem** form for issues involving:
 
 Include what AFK AI detected and what Windows, WSL, Docker, or Ollama reported.
 
-## Product bug
+## Product bugs
 
 Use the **General bug** form for a reproducible problem after setup, including:
 
 - chat or Open WebUI
-- start/stop behaviour
+- start and stop behaviour
 - service health
 - model selection
 - Control Center behaviour
 - search or local voice
 - behaviour that disagrees with the documentation
 
-## Security or privacy
+## Security and privacy
 
 Do not publish sensitive security details in a normal issue.
 
 Use the private reporting path in [SECURITY.md](SECURITY.md).
 
-## Good reports
+## Writing a useful report
 
-A short report with one reproducible failure is more useful than a broad list of symptoms. Include enough evidence to reproduce the problem, then stop. Raw machine dumps are rarely useful and can expose unrelated information.
+Keep the report focused on one reproducible problem. Include the evidence needed to reproduce it and remove unrelated machine details before posting.
