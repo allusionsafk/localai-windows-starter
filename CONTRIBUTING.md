@@ -1,55 +1,40 @@
 # Contributing to AFK AI
 
-AFK AI is still proving its Windows Friend Beta. Contributions are welcome when
-they make the supported path safer, clearer, more reliable, or easier to test.
+AFK AI is still proving its Windows Friend Beta. Contributions are welcome when they make the supported path safer, clearer, more reliable, or easier to test.
 
-## Keep the scope sharp
+## Keep changes focused
 
 Prefer one demonstrated problem and one coherent fix.
 
-Avoid mixing a focused change with:
+Avoid mixing a focused change with broad refactors, repository-wide renames, dependency churn, speculative architecture work, or unrelated visual cleanup.
 
-- broad refactors
-- repository-wide renames
-- dependency churn
-- speculative architecture changes
-- unrelated visual or documentation cleanup
+**AFK AI** is the product name. Existing `localai` package, command, and repository names can remain where a rename would create migration risk without improving the product.
 
-**AFK AI** is the customer-facing product name. Existing `localai` package,
-command, and repository names can remain where renaming would add migration risk
-without improving the product.
+## Before changing behaviour
 
-## Before changing behavior
-
-1. Reproduce the problem or establish the current baseline.
+1. Reproduce the problem or establish the baseline.
 2. Add or identify a regression test when practical.
-3. Implement the smallest maintainable fix for the demonstrated mechanism.
+3. Make the smallest maintainable change that addresses the mechanism.
 4. Run focused checks first.
-5. Run the appropriate wider cheap checks once the change is stable.
-6. Keep documentation aligned with actual runtime behavior.
+5. Run the wider inexpensive gates that cover the touched area.
+6. Keep documentation aligned with observed behaviour.
 
-Do not claim that a platform, recovery path, privacy property, or installer
-behavior has been tested unless it actually has.
+Do not describe a platform, recovery path, privacy property, installer path, or performance result as tested unless it was actually tested.
 
-## Privacy and security defaults
-
-Changes must preserve AFK AI's local-first boundary.
+## Privacy and security
 
 Do not:
 
 - expose local services to the LAN or internet by default
 - add telemetry or upload diagnostics without explicit product review
-- include chats, prompts, documents, credentials, tokens, cookies, `.env`
-  values, or unrelated machine data in diagnostics
-- tell users to disable Defender, Smart App Control, antivirus, UAC, or other
-  Windows security controls as a blanket workaround
+- put chats, prompts, documents, credentials, tokens, cookies, `.env` values, or unrelated machine data in diagnostics
+- tell users to disable Defender, Smart App Control, antivirus, UAC, or other Windows security controls as a blanket workaround
 - permanently weaken PowerShell execution policy
 - bypass pinned download or integrity checks for convenience
 
-Security vulnerabilities belong in the private reporting flow documented in
-[SECURITY.md](SECURITY.md).
+Security vulnerabilities belong in the private path described in [SECURITY.md](SECURITY.md).
 
-## Tests and checks
+## Checks
 
 Use the checks appropriate to the files you touched.
 
@@ -61,23 +46,20 @@ ruff
 mypy
 ```
 
-Installer and public-boundary work also has repository-specific checks under
-`tests/` and `ai-public-audit.ps1`.
+Installer and public-boundary work also has repository-specific checks under `tests/` and `ai-public-audit.ps1`.
 
-Do not run heavyweight model downloads, Docker setup, GPU workloads, or
-unrelated end-to-end work merely to change documentation or a pure helper.
+Do not run model downloads, Docker setup, GPU workloads, or unrelated end-to-end work for a documentation-only or pure-helper change.
 
 ## Pull requests
 
-A useful pull request answers five questions:
+A useful pull request states:
 
-1. What concrete problem does this solve?
-2. What changed?
-3. What intentionally did not change?
-4. What checks actually ran, with results?
-5. What limitations or follow-up work remain?
+- the problem
+- the change
+- what was intentionally left alone
+- the checks that ran and their results
+- any remaining limitation or follow-up
 
-Call out any privacy, security, installation, networking, or release impact.
+Call out privacy, security, installation, networking, runtime ownership, or release impact.
 
-Keep release pins unchanged unless the PR is specifically a reviewed release
-operation.
+Keep release pins unchanged unless the pull request is specifically a reviewed release operation.
