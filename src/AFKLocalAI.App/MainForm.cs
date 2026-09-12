@@ -296,8 +296,9 @@ public sealed class MainForm : Form
             return;
         }
         SetBusy(true, $"{recovery.Label}…");
+        // stderr is streamed live by the runner now; re-appending it here would
+        // print every error line twice.
         var result = await _runner.RunAsync(_controller.Recovery(_preflight.Code, recovery.ActionId), AppendProcessLine);
-        AppendText(result.StandardError);
         SetBusy(false);
         await RefreshPreflightAsync();
     }
@@ -307,7 +308,6 @@ public sealed class MainForm : Form
         SetBusy(true, "Setting up your local AI…");
         _progress.Clear();
         var result = await _runner.RunAsync(_controller.Provision(), AppendProcessLine);
-        AppendText(result.StandardError);
         if (result.ExitCode == 0)
         {
             _state.Usable = true;

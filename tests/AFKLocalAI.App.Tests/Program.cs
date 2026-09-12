@@ -168,6 +168,72 @@ finally
     if (Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true);
 }
 
+
+// ---------------------------------------------------------------- live output
+// Regression: the runner used to ReadToEnd both streams, wait for exit, and only
+// then replay stdout through the callback. Every line arrived after the work was
+// over, which is why a real install watched an empty progress panel for minutes
+// while winget and Docker did the actual work.
+{
+    var runner = new HiddenProcessRunner();
+    var seen = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    var firstLineSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Emits a line, then stays alive. If the callback only fires at exit, the
+    // wait below times out.
+    var script = "Write-Output 'AFK-LIVE-1'; Start-Sleep -Milliseconds 2500; Write-Output 'AFK-LIVE-2'";
+    var spec = ProcessSpec.Hidden("powershell.exe",
+        new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script }, root, "live");
+
+    var run = runner.RunAsync(spec, line =>
+    {
+        seen.Enqueue(line);
+        if (line.Contains("AFK-LIVE-1", StringComparison.Ordinal)) firstLineSeen.TrySetResult();
+    });
+
+    var arrivedEarly = await Task.WhenAny(firstLineSeen.Task, Task.Delay(TimeSpan.FromSeconds(2))) == firstLineSeen.Task;
+    Check("output arrives before the child exits", arrivedEarly && !run.IsCompleted,
+        $"early={arrivedEarly} processExited={run.IsCompleted}");
+
+    var liveResult = await run;
+    Check("streamed output is still captured in the result",
+        liveResult.StandardOutput.Contains("AFK-LIVE-2", StringComparison.Ordinal));
+    Check("each line is delivered exactly once",
+        seen.Count(l => l.Contains("AFK-LIVE-1", StringComparison.Ordinal)) == 1,
+        $"count={seen.Count(l => l.Contains("AFK-LIVE-1", StringComparison.Ordinal))}");
+}
+
+// Both streams are drained concurrently, so a chatty stderr cannot deadlock a
+// parent that is only reading stdout.
+{
+    var runner = new HiddenProcessRunner();
+    var script = "1..200 | ForEach-Object { Write-Output \"out-$_\"; [Console]::Error.WriteLine(\"err-$_\") }";
+    var spec = ProcessSpec.Hidden("powershell.exe",
+        new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script }, root, "both-streams");
+    var both = runner.RunAsync(spec);
+    var finished = await Task.WhenAny(both, Task.Delay(TimeSpan.FromSeconds(60))) == both;
+    Check("concurrent stdout and stderr do not deadlock", finished);
+    if (finished)
+    {
+        var r = await both;
+        Check("stdout fully captured", r.StandardOutput.Contains("out-200", StringComparison.Ordinal));
+        Check("stderr fully captured", r.StandardError.Contains("err-200", StringComparison.Ordinal));
+    }
+}
+
+// Cancellation stops the wait and does not hang.
+{
+    var runner = new HiddenProcessRunner();
+    using var cts = new CancellationTokenSource();
+    var spec = ProcessSpec.Hidden("powershell.exe",
+        new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 120" }, root, "cancel");
+    var pending = runner.RunAsync(spec, null, cts.Token);
+    cts.CancelAfter(TimeSpan.FromMilliseconds(300));
+    var cancelled = false;
+    try { await pending; } catch (OperationCanceledException) { cancelled = true; }
+    Check("cancellation is observed", cancelled);
+}
+
 Console.WriteLine();
 if (failures.Count > 0)
 {
