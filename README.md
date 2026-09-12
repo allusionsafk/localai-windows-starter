@@ -163,5 +163,4 @@ MIT. See [LICENSE](LICENSE).
 ---
 
 **ALLUSIONS**  
-Independent software by Jidan.  
-[allusionsafk on GitHub](https://github.com/allusionsafk)
+Independent software by Jidan.
