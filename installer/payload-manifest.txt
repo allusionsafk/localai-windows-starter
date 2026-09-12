@@ -56,6 +56,7 @@ src/localai/paths.py
 src/localai/perf.py
 src/localai/power.py
 src/localai/public_audit.py
+src/localai/readiness.py
 src/localai/scout_categories.py
 src/localai/start.py
 src/localai/static/dashboard.css

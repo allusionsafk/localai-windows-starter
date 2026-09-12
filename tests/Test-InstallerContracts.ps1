@@ -144,6 +144,43 @@ if (Test-Path -LiteralPath $buildPath) {
   Assert-True 'build verifies the pinned Inno compiler version' ($build -match 'toolchain\.json' -and $build -match 'GetVersionInfo')
 }
 
+Write-Host '-- runtime identity and image pinning' -ForegroundColor Cyan
+# Regression from a real install. The shipped compose declared the project name
+# "localai", which a private engineering workbench on the development machine
+# also declares. Starting AFK therefore resolved to the SAME project: same
+# container names, same network, and same volumes (localai_open-webui). AFK
+# recreated the workbench's containers against its three-month-old Open WebUI
+# database; the backend then returned HTTP 500 from /api/config while still
+# serving the static frontend, which is Open WebUI's "Backend Required
+# (frontend only)" screen - and AFK still reported "ready".
+$composePath = Require-File 'docker-compose.yml'
+if (Test-Path -LiteralPath $composePath) {
+  $compose = Get-ContractText -Path $composePath
+  $projectName = [regex]::Match($compose, '(?m)^name:\s*(?<name>\S+)\s*$')
+  Assert-True 'compose declares an explicit project name' $projectName.Success
+  if ($projectName.Success) {
+    $value = $projectName.Groups['name'].Value
+    Assert-True 'the project name is AFK-specific' ($value -ne 'localai') "name=$value"
+    Assert-True 'the project name identifies this product' ($value -match '^afk') "name=$value"
+  }
+  # A certified installer cannot promise a working product if its core service
+  # image can change underneath it between qualification and first run.
+  Assert-True 'Open WebUI is pinned by immutable digest' (
+    $compose -match 'open-webui@sha256:[0-9a-f]{64}')
+  Assert-True 'Open WebUI is not tracking a mutable tag' (
+    $compose -notmatch 'open-webui:main')
+  Assert-True 'SearXNG is version pinned' ($compose -match 'searxng/searxng:[0-9]')
+  Assert-True 'Kokoro is version pinned' ($compose -match 'kokoro-fastapi-cpu:v[0-9]')
+}
+
+$backupPath = Join-Path $Root 'src/localai/backup.py'
+if (Test-Path -LiteralPath $backupPath) {
+  $backup = Get-ContractText -Path $backupPath
+  # Backing up or restoring the wrong project's volume is a data-loss bug.
+  Assert-True 'the backup volume fallback is AFK-scoped' (
+    $backup -match 'OPEN_WEBUI_VOLUME\s*=\s*"afk-localai_open-webui"')
+}
+
 Write-Host '-- uninstall ownership contract' -ForegroundColor Cyan
 # Regression: uninstalling AFK LocalAI must only ever stop resources whose AFK
 # ownership is proven. The shipped uninstaller used to run "py -m localai stop",
@@ -259,6 +296,8 @@ if (Test-Path -LiteralPath $manifestPath) {
     $ownershipEntries -contains 'src/localai/afk_ownership.py')
   Assert-True 'payload ships the entry point' (
     $ownershipEntries -contains 'installer/afk-payload.py')
+  Assert-True 'payload ships the readiness module' (
+    $ownershipEntries -contains 'src/localai/readiness.py')
 }
 
 Write-Host ''
